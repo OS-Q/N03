@@ -2,25 +2,25 @@
 
 [![sites](OS-Q/OS-Q.png)](http://www.OS-Q.com)
 
-基于N76E003芯片编程，成本低功能全
+基于成本低功能齐全的N76E003平台
 
-#### 归属节点：[M1](https://github.com/OS-Q/M1)
+#### 归属控制节点：[M1](https://github.com/OS-Q/M1)
 
-#### 关于系统：[OS-Q](https://github.com/OS-Q/OS-Q)
+#### 关于系统架构：[OS-Q](https://github.com/OS-Q/OS-Q)
 
 ---
 
 ## [平台描述](https://github.com/OS-Q/W1/wiki) 
 
-基于N76E003单片机的芯级平台，通过IO和PWM直接输出实现对外驱动控制，通过串口和外部进行通信
+新塘N76E003单片机拥有稳定可靠的性能和外设，具有极低的价格和丰富的资源，支持keil开发
 
 ### [共用资源](https://github.com/OS-Q/W1/wiki/src) 
 
 #### software
 
-##### N76E003
+##### N76E003工程源文件
 
-N76E003工程必须的文件
+
 
 ---
 
