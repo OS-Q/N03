@@ -1,4 +1,4 @@
-﻿# W1:[N76E平台](https://github.com/OS-Q/W1)
+﻿# W1:[低成本平台](https://github.com/OS-Q/W1)
 
 [![sites](OS-Q/OS-Q.png)](http://www.OS-Q.com)
 
@@ -68,6 +68,7 @@
 
 ---
 
-###  [Q redefined the scope of operation system](http://www.OS-Q.com)
+###  [Q redefined the scope of Operation System](http://www.OS-Q.com)
 ###  qitas@qitas.cn
-#### 2018-11-27
+###  2018-11-29
+
