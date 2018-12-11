@@ -1,14 +1,14 @@
-﻿# W1：[电气信号采集](https://github.com/OS-Q/W1)
+﻿# W1：[电气信号](https://github.com/OS-Q/W1)
 
 [![sites](OS-Q/OS-Q.png)](http://www.OS-Q.com)
 
-#### 归属控制节点：[M1](https://github.com/OS-Q/M1)
+#### 归属信号采集：[M1](https://github.com/OS-Q/M1)
 
 #### 关于系统架构：[OS-Q](https://github.com/OS-Q/OS-Q)
 
 ## [平台描述](https://github.com/OS-Q/W1/wiki) 
 
-用于板载设备直接采集电气信号，包括电压电流等数据
+W1电气信号采集平台用于板载设备直接采集电压电流等信号量，不需要传感器
 
 ### [共用资源](https://github.com/OS-Q/W1/wiki) 
 
@@ -22,19 +22,19 @@
 
 #### D1：[低成本设备](https://github.com/OS-Q/D1)
 
-低成本板载多通道12bit ADC信号转换,N76E003
+低成本板载多通道12bit ADC信号转换（N76E003）
 
 #### D2：[低功耗设备](https://github.com/OS-Q/D2)
 
-低功耗低成本多通道集成12bit ADC转换,STM8L
+低功耗低成本多通道集成12bit ADC转换（STM8L）
 
 #### D3：[高精度设备](https://github.com/OS-Q/D3)
 
-具有大于14bit ADC的转换精度
+具有大于14bit ADC采样转换精度
 
 #### D4：[多通道设备](https://github.com/OS-Q/D4)
 
-具有大量采集通道可以同时采集
+具有大于8通道可以同时采集转换
 
 #### D5：[NULL](https://github.com/OS-Q/D5)
 
@@ -68,8 +68,8 @@
 用于处理特殊需求情况
 
 ---
-####  qitas@qitas.cn
+####  © qitas@qitas.cn
 ###  [OS-Q redefined Operation System](http://www.OS-Q.com)
-####  © 2018-12-11
+####  @ 2018-12-11
 
 ---
