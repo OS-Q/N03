@@ -1,74 +1,75 @@
-﻿# W1:[低成本平台](https://github.com/OS-Q/W1)
+﻿# W1：[电气信号采集](https://github.com/OS-Q/W1)
 
 [![sites](OS-Q/OS-Q.png)](http://www.OS-Q.com)
-
-基于成本低功能齐全的N76E003平台
 
 #### 归属控制节点：[M1](https://github.com/OS-Q/M1)
 
 #### 关于系统架构：[OS-Q](https://github.com/OS-Q/OS-Q)
 
----
-
 ## [平台描述](https://github.com/OS-Q/W1/wiki) 
 
-新塘N76E003单片机拥有稳定可靠的性能和外设，具有极低的价格和丰富的资源，支持keil开发
+用于板载设备直接采集电气信号，包括电压电流等数据
 
-### [共用资源](https://github.com/OS-Q/W1/wiki/src) 
-
-#### software
-
-##### N76E003工程源文件
+### [共用资源](https://github.com/OS-Q/W1/wiki) 
 
 
 
 ---
 
-边缘设备命名规则：体系 Q[1,4] > 节点 M[1,12] > 平台 W[1,52] > 设备 D[1,365]。
+- 边缘设备统一命名规则：体系 Q:[1,4] -> 节点 M:[1,12] -> 平台 W:[1,52] -> 设备 D:[1,365]
 
 ## [包含设备](https://github.com/OS-Q/W1/wiki/index) 
 
-#### D1:[ADC采集设备](https://github.com/OS-Q/D1)
+#### D1：[低成本设备](https://github.com/OS-Q/D1)
 
-板载多通道12bit ADC信号采集
+低成本板载多通道12bit ADC信号转换,N76E003
 
-#### D2:[板载感知设备](https://github.com/OS-Q/D2)
+#### D2：[低功耗设备](https://github.com/OS-Q/D2)
 
-板载集成传感器
+低功耗低成本多通道集成12bit ADC转换,STM8L
 
-#### D3:[LCD显示设备](https://github.com/OS-Q/D3)
+#### D3：[高精度设备](https://github.com/OS-Q/D3)
 
-集成LCD显示设备和WS2812
+具有大于14bit ADC的转换精度
 
-#### D4:[板级设备](https://github.com/OS-Q/D4)
+#### D4：[多通道设备](https://github.com/OS-Q/D4)
 
-集成电机控制芯片
+具有大量采集通道可以同时采集
 
-#### D5:[板级设备](https://github.com/OS-Q/D5)
+#### D5：[NULL](https://github.com/OS-Q/D5)
 
-集成RS485通信芯片
 
-#### D6:[板级设备](https://github.com/OS-Q/D6)
 
-板载433MHz无线通信
+#### D6：[NULL](https://github.com/OS-Q/D6)
 
-#### D7:[板级设备](https://github.com/OS-Q/D7)
 
-板载红外收发通信
+
+#### D7：[NULL](https://github.com/OS-Q/D7)
+
+
+
+
+## [同级平台](https://github.com/OS-Q/M1/wiki)
+
+#### -> W1：[电气信号](https://github.com/OS-Q/W1)
+
+用于电气信号的采集转换
+
+#### W2：[常态转化](https://github.com/OS-Q/W2)
+
+用于处理转化常态信号量
+
+#### W3：[阈值监控](https://github.com/OS-Q/W3)
+
+用于监控阈值状态发生
+
+#### W4：[特殊平台](https://github.com/OS-Q/W4)
+
+用于处理特殊需求情况
 
 ---
-
-## [同级平台](https://github.com/OS-Q/W1/wiki/index)
-
-#### W2:[CH55平台](https://github.com/OS-Q/W2)
-
-#### W3:[STM8平台](https://github.com/OS-Q/W3)
-
-#### W4:[CC25平台](https://github.com/OS-Q/W4)
+####  qitas@qitas.cn
+###  [OS-Q redefined Operation System](http://www.OS-Q.com)
+####  © 2018-12-11
 
 ---
-
-###  [Q redefined the scope of Operation System](http://www.OS-Q.com)
-###  qitas@qitas.cn
-###  2018-11-29
-
