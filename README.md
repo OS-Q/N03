@@ -44,9 +44,9 @@
 
 快速高频次转换模拟信号
 
-#### D7：[高可靠设备](https://github.com/OS-Q/D7)
+#### D7：[电源监控](https://github.com/OS-Q/D7)
 
-长时间稳定可靠工作性能
+用于监控设备电源系统的状态
 
 ## [同级平台](https://github.com/OS-Q/M1/wiki)
 
@@ -54,15 +54,15 @@
 
 用于模拟信号的采集转换
 
-#### W2：[数字信号](https://github.com/OS-Q/W2)
+#### W2：[环境监控](https://github.com/OS-Q/W2)
 
-用于数字信号驱动和采集
+用于监控设备的外部环境
 
-#### W3：[阈值监控](https://github.com/OS-Q/W3)
+#### W3：[状态监控](https://github.com/OS-Q/W3)
 
-用于实时监控阈值被触发
+用于监控设备自身的状态
 
-#### W4：[特殊平台](https://github.com/OS-Q/W4)
+#### W4：[特殊信号](https://github.com/OS-Q/W4)
 
 用于处理特殊信号的采集
 
