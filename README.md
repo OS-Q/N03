@@ -1,4 +1,5 @@
-﻿# [电压输入](https://github.com/OS-Q/W1)
+﻿# [嵌入模块](https://github.com/OS-Q/W1)
+
 [![sites](OS-Q/OS-Q.png)](http://www.OS-Q.com)
 
 #### 归属数据转换：[M1](https://github.com/OS-Q/M1)
@@ -9,9 +10,7 @@ Edge-Q -> 体系 Q[1,4] -> 节点 M[1,12] -> 平台 W[1,52] -> 设备 D[1,365]
 
 ### [平台描述](https://github.com/OS-Q/W1/wiki)
 
-数据转换平台，通过集成各种数据采集终端传感器，通过归一的传感器实现数据输出。
-
-纯数据转换平台，用于转换和采集数据，无策略无条件进行数据转换。
+嵌入模块平台，用于将处理单元嵌入到目标传感器设备中，需要用模块去适配各种传感器器件，包括采集相关的协议和相应资源供应。
 
 ### [平台资源](https://github.com/OS-Q/W1)
 
@@ -29,7 +28,7 @@ Edge-Q -> 体系 Q[1,4] -> 节点 M[1,12] -> 平台 W[1,52] -> 设备 D[1,365]
 		* D5：[COM-IRQ](https://github.com/OS-Q/D5)
 		* D6：[USB-DRV](https://github.com/OS-Q/D6)
 		* D7：[RF-LP](https://github.com/OS-Q/D7)
-	* W2：[标准模块](https://github.com/OS-Q/W2)
+	* W2：[标准单元](https://github.com/OS-Q/W2)
 	* W3：[集成设备](https://github.com/OS-Q/W3)
 	* W4：[扩展平台](https://github.com/OS-Q/W4)
 
