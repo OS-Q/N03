@@ -1,17 +1,3 @@
-# Copyright 2019-present PlatformIO <contact@platformio.org>
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import json
 import os
 import sys
@@ -39,7 +25,7 @@ except ImportError:
 platform = env.PioPlatform()
 board = env.BoardConfig()
 
-FRAMEWORK_DIR = platform.get_package_dir("framework-zephyr")
+FRAMEWORK_DIR = platform.get_package_dir("framework-N03")
 assert os.path.isdir(FRAMEWORK_DIR)
 
 BUILD_DIR = env.subst("$BUILD_DIR")
@@ -50,10 +36,10 @@ CMAKE_API_REPLY_DIR = os.path.join(CMAKE_API_DIR, "reply")
 PLATFORMS_WITH_EXTERNAL_HAL = {
     "atmelsam": "atmel",
     "freescalekinetis": "nxp",
-    "ststm32": "stm32",
+    "H1": "stm32",
     "siliconlabsefm32": "silabs",
     "nordicnrf51": "nordic",
-    "nordicnrf52": "nordic",
+    "H9": "nordic",
     "nxplpc": "nxp"
 }
 

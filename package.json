@@ -1,7 +1,7 @@
 {
-	"description": "A small, scalable open source RTOS for IoT embedded devices",
-	"name": "framework-zephyr",
+	"description": "Q Framework zephyr RTOS",
+	"name": "framework-N03",
 	"system": "*",
 	"url": "https://www.zephyrproject.org/",
-	"version": "1.20000.191128"
+	"version": "1.0.0"
 }
