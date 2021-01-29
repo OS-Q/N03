@@ -8,7 +8,8 @@
 #include <ptp_clock.h>
 
 #ifdef CONFIG_USERSPACE
-Z_SYSCALL_HANDLER(ptp_clock_get, dev, tm)
+int z_vrfy_ptp_clock_get(const struct device *dev,
+			 struct net_ptp_time *tm)
 {
 	struct net_ptp_time ptp_time;
 	int ret;
@@ -16,7 +17,7 @@ Z_SYSCALL_HANDLER(ptp_clock_get, dev, tm)
 	Z_OOPS(Z_SYSCALL_DRIVER_PTP_CLOCK(dev, get));
 	Z_OOPS(Z_SYSCALL_MEMORY_WRITE(tm, sizeof(struct net_ptp_time)));
 
-	ret = z_impl_ptp_clock_get((struct device *)dev, &ptp_time);
+	ret = z_impl_ptp_clock_get((const struct device *)dev, &ptp_time);
 	if (ret != 0) {
 		return 0;
 	}
@@ -25,6 +26,7 @@ Z_SYSCALL_HANDLER(ptp_clock_get, dev, tm)
 		return 0;
 	}
 
-	return (u32_t)ret;
+	return ret;
 }
+#include <syscalls/ptp_clock_get_mrsh.c>
 #endif /* CONFIG_USERSPACE */

@@ -22,21 +22,13 @@
 #define LOAPIC_IRQ_COUNT 6  /* Default to LOAPIC_TIMER to LOAPIC_ERROR */
 
 void z_irq_controller_irq_config(unsigned int vector, unsigned int irq,
-				 u32_t flags);
+				 uint32_t flags);
 
 int z_irq_controller_isr_vector_get(void);
 
-#ifdef CONFIG_X2APIC
-void z_x2apic_eoi(void);
-#endif
-
 static inline void z_irq_controller_eoi(void)
 {
-#if defined(CONFIG_X2APIC)
-	z_x2apic_eoi();
-#else /* xAPIC */
-	*(volatile int *)(CONFIG_LOAPIC_BASE_ADDRESS + LOAPIC_EOI) = 0;
-#endif
+	x86_write_loapic(LOAPIC_EOI, 0);
 }
 
 #endif /* _ASMLANGUAGE */

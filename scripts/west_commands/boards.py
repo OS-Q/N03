@@ -4,13 +4,14 @@
 
 import argparse
 import collections
-import os
 import re
 import textwrap
 
 from west import log
 from west.commands import WestCommand
+
 from zcmake import run_cmake
+from zephyr_ext_common import ZEPHYR_CMAKE
 
 class Boards(WestCommand):
 
@@ -49,18 +50,12 @@ class Boards(WestCommand):
         # flags
         parser.add_argument('-f', '--format', default=default_fmt,
                             help='''Format string to use to list each board;
-                                    see FORMAT STRINGS below.'''),
+                                    see FORMAT STRINGS below.''')
 
         return parser
 
     def do_run(self, args, unknown_args):
-        zb = os.environ.get('ZEPHYR_BASE')
-        if not zb:
-            log.die('Internal error: ZEPHYR_BASE not set in the environment, '
-                    'and should have been by the main script')
-
-        cmake_args = ['-DBOARD_ROOT_SPACE_SEPARATED={}'.format(zb),
-                      '-P', '{}/cmake/boards.cmake'.format(zb)]
+        cmake_args = ['-P', f'{ZEPHYR_CMAKE}/boards.cmake']
         lines = run_cmake(cmake_args, capture_output=True)
         arch_re = re.compile(r'\s*([\w-]+)\:')
         board_re = re.compile(r'\s*([\w-]+)\s*')

@@ -1,22 +1,18 @@
-title: STM32 UART
+description: STM32 UART
 
-description: >
-    This binding gives a base representation of the STM32 UART
+compatible: "st,stm32-uart"
 
-inherits:
-    !include uart.yaml
+include: uart-controller.yaml
 
 properties:
-    compatible:
-      constraint: "st,stm32-uart"
-
     reg:
-      category: required
+      required: true
 
     interrupts:
-      category: required
+      required: true
 
-    hw-flow-control:
-      type: boolean
-      category: optional
-      description: Set to enable RTS/CTS flow control at boot time
+    parity:
+      required: false
+      type: int
+      description: Configures the parity of the adapter. Value 0 for none, 1 for odd and 2 for even parity.
+      default: 0

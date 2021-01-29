@@ -10,7 +10,6 @@
 #include <sys/stat.h>
 #include <linker/linker-defs.h>
 #include <sys/util.h>
-#include <kernel_internal.h>
 #include <sys/errno_private.h>
 #include <sys/libc-hooks.h>
 #include <syscall_handler.h>
@@ -31,60 +30,53 @@ MALLOC_BSS static unsigned char __aligned(CONFIG_NEWLIB_LIBC_ALIGNED_HEAP_SIZE)
 #define MAX_HEAP_SIZE CONFIG_NEWLIB_LIBC_ALIGNED_HEAP_SIZE
 
 #else /* CONFIG_NEWLIB_LIBC_ALIGNED_HEAP_SIZE */
-
-/* Heap base and size are determined based on the available unused SRAM. */
-
+/* Heap base and size are determined based on the available unused SRAM,
+ * in the interval from a properly aligned address after the linker symbol
+ * `_end`, to the end of SRAM
+ */
 #define USED_RAM_END_ADDR   POINTER_TO_UINT(&_end)
 
-#if CONFIG_X86
-#define USED_RAM_SIZE  (USED_RAM_END_ADDR - DT_PHYS_RAM_ADDR)
-#define MAX_HEAP_SIZE ((KB(DT_RAM_SIZE)) - USED_RAM_SIZE)
-#elif CONFIG_NIOS2
-#include <layout.h>
-#define USED_RAM_SIZE  (USED_RAM_END_ADDR - _RAM_ADDR)
-#define MAX_HEAP_SIZE (_RAM_SIZE - USED_RAM_SIZE)
-#elif CONFIG_RISCV
-#include <soc.h>
-#define USED_RAM_SIZE  (USED_RAM_END_ADDR - RISCV_RAM_BASE)
-#define MAX_HEAP_SIZE  (RISCV_RAM_SIZE - USED_RAM_SIZE)
-#elif CONFIG_ARM
-#include <soc.h>
-#if defined(CONFIG_USERSPACE)
-/* MPU shall program the heap area as user-accessible; therefore, heap base
- * (and size) shall take into account the ARM MPU minimum region granularity.
+#ifdef Z_MALLOC_PARTITION_EXISTS
+/* Need to be able to program a memory protection region from HEAP_BASE
+ * to the end of RAM so that user threads can get at it.
+ * Implies that the base address needs to be suitably aligned since the
+ * bounds have to go in a k_mem_partition.
  */
-#define HEAP_BASE ((USED_RAM_END_ADDR + \
-		CONFIG_ARM_MPU_REGION_MIN_ALIGN_AND_SIZE) & \
-	(~(CONFIG_ARM_MPU_REGION_MIN_ALIGN_AND_SIZE - 1)))
+#ifdef CONFIG_MMU
+/* Linker script may already have done this, but just to be safe */
+#define HEAP_BASE	ROUND_UP(USED_RAM_END_ADDR, CONFIG_MMU_PAGE_SIZE)
+#else /* MPU-based systems */
+/* TODO: Need a generic Kconfig for the MPU region granularity */
+#if defined(CONFIG_ARM)
+#define HEAP_BASE	ROUND_UP(USED_RAM_END_ADDR, \
+				 CONFIG_ARM_MPU_REGION_MIN_ALIGN_AND_SIZE)
+#elif defined(CONFIG_ARC)
+#define HEAP_BASE	ROUND_UP(USED_RAM_END_ADDR, Z_ARC_MPU_ALIGN)
 #else
-#define HEAP_BASE USED_RAM_END_ADDR
-#endif /* CONFIG_USERSPACE*/
-#define USED_RAM_SIZE  (HEAP_BASE - CONFIG_SRAM_BASE_ADDRESS)
-#define MAX_HEAP_SIZE ((KB(CONFIG_SRAM_SIZE)) - USED_RAM_SIZE)
-#elif CONFIG_XTENSA
+#error "Unsupported platform"
+#endif /* CONFIG_<arch> */
+#endif /* !CONFIG_MMU */
+#else /* !Z_MALLOC_PARTITION_EXISTS */
+/* No partition, heap can just start wherever _end is */
+#define HEAP_BASE	USED_RAM_END_ADDR
+#endif /* Z_MALLOC_PARTITION_EXISTS */
+
+#ifdef CONFIG_XTENSA
 extern void *_heap_sentry;
-#define MAX_HEAP_SIZE  (POINTER_TO_UINT(&_heap_sentry) - USED_RAM_END_ADDR)
+#define MAX_HEAP_SIZE  (POINTER_TO_UINT(&_heap_sentry) - HEAP_BASE)
 #else
-#define USED_RAM_SIZE  (USED_RAM_END_ADDR - CONFIG_SRAM_BASE_ADDRESS)
-#define MAX_HEAP_SIZE ((KB(CONFIG_SRAM_SIZE)) - USED_RAM_SIZE)
+#define MAX_HEAP_SIZE	(KB(CONFIG_SRAM_SIZE) - \
+			 (HEAP_BASE - CONFIG_SRAM_BASE_ADDRESS))
 #endif
 
-#ifndef HEAP_BASE
-#define HEAP_BASE USED_RAM_END_ADDR
-#endif
-
-#ifdef CONFIG_USERSPACE
+#if Z_MALLOC_PARTITION_EXISTS
 struct k_mem_partition z_malloc_partition;
 
-static int malloc_prepare(struct device *unused)
+static int malloc_prepare(const struct device *unused)
 {
 	ARG_UNUSED(unused);
 
-#if CONFIG_NEWLIB_LIBC_ALIGNED_HEAP_SIZE
-	z_malloc_partition.start = (u32_t)heap_base;
-#else
 	z_malloc_partition.start = HEAP_BASE;
-#endif
 	z_malloc_partition.size = MAX_HEAP_SIZE;
 	z_malloc_partition.attr = K_MEM_PARTITION_P_RW_U_RW;
 	return 0;
@@ -137,11 +129,12 @@ int z_impl_zephyr_read_stdin(char *buf, int nbytes)
 }
 
 #ifdef CONFIG_USERSPACE
-Z_SYSCALL_HANDLER(zephyr_read_stdin, buf, nbytes)
+static inline int z_vrfy_z_zephyr_read_stdin(char *buf, int nbytes)
 {
 	Z_OOPS(Z_SYSCALL_MEMORY_WRITE(buf, nbytes));
 	return z_impl_zephyr_read_stdin((char *)buf, nbytes);
 }
+#include <syscalls/z_zephyr_read_stdin_mrsh.c>
 #endif
 
 int z_impl_zephyr_write_stdout(const void *buffer, int nbytes)
@@ -159,11 +152,12 @@ int z_impl_zephyr_write_stdout(const void *buffer, int nbytes)
 }
 
 #ifdef CONFIG_USERSPACE
-Z_SYSCALL_HANDLER(zephyr_write_stdout, buf, nbytes)
+static inline int z_vrfy_z_zephyr_write_stdout(const void *buf, int nbytes)
 {
 	Z_OOPS(Z_SYSCALL_MEMORY_READ(buf, nbytes));
 	return z_impl_zephyr_write_stdout((const void *)buf, nbytes);
 }
+#include <syscalls/z_zephyr_write_stdout_mrsh.c>
 #endif
 
 #ifndef CONFIG_POSIX_API
@@ -173,7 +167,7 @@ int _read(int fd, char *buf, int nbytes)
 
 	return z_impl_zephyr_read_stdin(buf, nbytes);
 }
-FUNC_ALIAS(_read, read, int);
+__weak FUNC_ALIAS(_read, read, int);
 
 int _write(int fd, const void *buf, int nbytes)
 {
@@ -181,25 +175,25 @@ int _write(int fd, const void *buf, int nbytes)
 
 	return z_impl_zephyr_write_stdout(buf, nbytes);
 }
-FUNC_ALIAS(_write, write, int);
+__weak FUNC_ALIAS(_write, write, int);
 
 int _open(const char *name, int mode)
 {
 	return -1;
 }
-FUNC_ALIAS(_open, open, int);
+__weak FUNC_ALIAS(_open, open, int);
 
 int _close(int file)
 {
 	return -1;
 }
-FUNC_ALIAS(_close, close, int);
+__weak FUNC_ALIAS(_close, close, int);
 
 int _lseek(int file, int ptr, int dir)
 {
 	return 0;
 }
-FUNC_ALIAS(_lseek, lseek, int);
+__weak FUNC_ALIAS(_lseek, lseek, int);
 #else
 extern ssize_t write(int file, const char *buffer, size_t count);
 #define _write	write
@@ -209,28 +203,28 @@ int _isatty(int file)
 {
 	return 1;
 }
-FUNC_ALIAS(_isatty, isatty, int);
+__weak FUNC_ALIAS(_isatty, isatty, int);
 
 int _kill(int i, int j)
 {
 	return 0;
 }
-FUNC_ALIAS(_kill, kill, int);
+__weak FUNC_ALIAS(_kill, kill, int);
 
 int _getpid(void)
 {
 	return 0;
 }
-FUNC_ALIAS(_getpid, getpid, int);
+__weak FUNC_ALIAS(_getpid, getpid, int);
 
 int _fstat(int file, struct stat *st)
 {
 	st->st_mode = S_IFCHR;
 	return 0;
 }
-FUNC_ALIAS(_fstat, fstat, int);
+__weak FUNC_ALIAS(_fstat, fstat, int);
 
-void _exit(int status)
+__weak void _exit(int status)
 {
 	_write(1, "exit\n", 5);
 	while (1) {
@@ -244,6 +238,7 @@ void *_sbrk(int count)
 {
 	void *ret, *ptr;
 
+	/* coverity[CHECKED_RETURN] */
 	sys_sem_take(&heap_sem, K_FOREVER);
 
 #if CONFIG_NEWLIB_LIBC_ALIGNED_HEAP_SIZE
@@ -259,13 +254,124 @@ void *_sbrk(int count)
 		ret = (void *)-1;
 	}
 
+	/* coverity[CHECKED_RETURN] */
 	sys_sem_give(&heap_sem);
 
 	return ret;
 }
-FUNC_ALIAS(_sbrk, sbrk, void *);
+__weak FUNC_ALIAS(_sbrk, sbrk, void *);
 
-int *__errno(void)
+__weak int *__errno(void)
 {
 	return z_errno();
+}
+
+/* This function gets called if static buffer overflow detection is enabled
+ * on stdlib side (Newlib here), in case such an overflow is detected. Newlib
+ * provides an implementation not suitable for us, so we override it here.
+ */
+__weak FUNC_NORETURN void __chk_fail(void)
+{
+	static const char chk_fail_msg[] = "* buffer overflow detected *\n";
+	_write(2, chk_fail_msg, sizeof(chk_fail_msg) - 1);
+	k_oops();
+	CODE_UNREACHABLE;
+}
+
+#if CONFIG_XTENSA
+extern int _read(int fd, char *buf, int nbytes);
+extern int _open(const char *name, int mode);
+extern int _close(int file);
+extern int _lseek(int file, int ptr, int dir);
+
+/* The Newlib in xtensa toolchain has a few missing functions for the
+ * reentrant versions of the syscalls.
+ */
+_ssize_t _read_r(struct _reent *r, int fd, void *buf, size_t nbytes)
+{
+	ARG_UNUSED(r);
+
+	return _read(fd, (char *)buf, nbytes);
+}
+
+_ssize_t _write_r(struct _reent *r, int fd, const void *buf, size_t nbytes)
+{
+	ARG_UNUSED(r);
+
+	return _write(fd, buf, nbytes);
+}
+
+int _open_r(struct _reent *r, const char *name, int flags, int mode)
+{
+	ARG_UNUSED(r);
+	ARG_UNUSED(flags);
+
+	return _open(name, mode);
+}
+
+int _close_r(struct _reent *r, int file)
+{
+	ARG_UNUSED(r);
+
+	return _close(file);
+}
+
+_off_t _lseek_r(struct _reent *r, int file, _off_t ptr, int dir)
+{
+	ARG_UNUSED(r);
+
+	return _lseek(file, ptr, dir);
+}
+
+int _isatty_r(struct _reent *r, int file)
+{
+	ARG_UNUSED(r);
+
+	return _isatty(file);
+}
+
+int _kill_r(struct _reent *r, int i, int j)
+{
+	ARG_UNUSED(r);
+
+	return _kill(i, j);
+}
+
+int _getpid_r(struct _reent *r)
+{
+	ARG_UNUSED(r);
+
+	return _getpid();
+}
+
+int _fstat_r(struct _reent *r, int file, struct stat *st)
+{
+	ARG_UNUSED(r);
+
+	return _fstat(file, st);
+}
+
+void _exit_r(struct _reent *r, int status)
+{
+	ARG_UNUSED(r);
+
+	_exit(status);
+}
+
+void *_sbrk_r(struct _reent *r, int count)
+{
+	ARG_UNUSED(r);
+
+	return _sbrk(count);
+}
+#endif /* CONFIG_XTENSA */
+
+struct timeval;
+
+int _gettimeofday(struct timeval *__tp, void *__tzp)
+{
+	ARG_UNUSED(__tp);
+	ARG_UNUSED(__tzp);
+
+	return -1;
 }

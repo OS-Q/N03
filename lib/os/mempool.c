@@ -9,6 +9,7 @@
 #include <sys/__assert.h>
 #include <sys/mempool_base.h>
 #include <sys/mempool.h>
+#include <sys/check.h>
 
 #ifdef CONFIG_MISRA_SANE
 #define LVL_ARRAY_SZ(n) (8 * sizeof(void *) / 2)
@@ -18,21 +19,21 @@
 
 static void *block_ptr(struct sys_mem_pool_base *p, size_t lsz, int block)
 {
-	return (u8_t *)p->buf + lsz * block;
+	return (uint8_t *)p->buf + lsz * block;
 }
 
 static int block_num(struct sys_mem_pool_base *p, void *block, int sz)
 {
-	return ((u8_t *)block - (u8_t *)p->buf) / sz;
+	return ((uint8_t *)block - (uint8_t *)p->buf) / sz;
 }
 
 /* Places a 32 bit output pointer in word, and an integer bit index
  * within that word as the return value
  */
 static int get_bit_ptr(struct sys_mem_pool_base *p, int level, int bn,
-		       u32_t **word)
+		       uint32_t **word)
 {
-	u32_t *bitarray = level <= p->max_inline_level ?
+	uint32_t *bitarray = level <= p->max_inline_level ?
 		p->levels[level].bits : p->levels[level].bits_p;
 
 	*word = &bitarray[bn / 32];
@@ -40,28 +41,39 @@ static int get_bit_ptr(struct sys_mem_pool_base *p, int level, int bn,
 	return bn & 0x1f;
 }
 
-static void set_free_bit(struct sys_mem_pool_base *p, int level, int bn)
+static void set_alloc_bit(struct sys_mem_pool_base *p, int level, int bn)
 {
-	u32_t *word;
+	uint32_t *word;
 	int bit = get_bit_ptr(p, level, bn, &word);
 
 	*word |= (1<<bit);
 }
 
-static void clear_free_bit(struct sys_mem_pool_base *p, int level, int bn)
+static void clear_alloc_bit(struct sys_mem_pool_base *p, int level, int bn)
 {
-	u32_t *word;
+	uint32_t *word;
 	int bit = get_bit_ptr(p, level, bn, &word);
 
 	*word &= ~(1<<bit);
 }
 
-/* Returns all four of the free bits for the specified blocks
+#ifdef CONFIG_ASSERT
+static inline bool alloc_bit_is_set(struct sys_mem_pool_base *p,
+				    int level, int bn)
+{
+	uint32_t *word;
+	int bit = get_bit_ptr(p, level, bn, &word);
+
+	return (*word >> bit) & 1;
+}
+#endif
+
+/* Returns all four of the allocated bits for the specified blocks
  * "partners" in the bottom 4 bits of the return value
  */
-static int partner_bits(struct sys_mem_pool_base *p, int level, int bn)
+static int partner_alloc_bits(struct sys_mem_pool_base *p, int level, int bn)
 {
-	u32_t *word;
+	uint32_t *word;
 	int bit = get_bit_ptr(p, level, bn, &word);
 
 	return (*word >> (4*(bit / 4))) & 0xf;
@@ -71,12 +83,12 @@ void z_sys_mem_pool_base_init(struct sys_mem_pool_base *p)
 {
 	int i;
 	size_t buflen = p->n_max * p->max_sz, sz = p->max_sz;
-	u32_t *bits = (u32_t *)((u8_t *)p->buf + buflen);
+	uint32_t *bits = (uint32_t *)((uint8_t *)p->buf + buflen);
 
 	p->max_inline_level = -1;
 
 	for (i = 0; i < p->n_levels; i++) {
-		int nblocks = buflen / sz;
+		size_t nblocks = buflen / sz;
 
 		sys_dlist_init(&p->levels[i].free_list);
 
@@ -94,7 +106,6 @@ void z_sys_mem_pool_base_init(struct sys_mem_pool_base *p)
 		void *block = block_ptr(p, p->max_sz, i);
 
 		sys_dlist_append(&p->levels[0].free_list, block);
-		set_free_bit(p, 0, i);
 	}
 }
 
@@ -138,7 +149,7 @@ static void *block_alloc(struct sys_mem_pool_base *p, int l, size_t lsz)
 
 	block = sys_dlist_get(&p->levels[l].free_list);
 	if (block != NULL) {
-		clear_free_bit(p, l, block_num(p, block, lsz));
+		set_alloc_bit(p, l, block_num(p, block, lsz));
 	}
 	return block;
 }
@@ -151,8 +162,12 @@ static unsigned int bfree_recombine(struct sys_mem_pool_base *p, int level,
 		int i, lsz = lsizes[level];
 		void *block = block_ptr(p, lsz, bn);
 
+		/* Detect common double-free occurrences */
+		__ASSERT(alloc_bit_is_set(p, level, bn),
+			 "mempool double-free detected at %p", block);
+
 		/* Put it back */
-		set_free_bit(p, level, bn);
+		clear_alloc_bit(p, level, bn);
 		sys_dlist_append(&p->levels[level].free_list, block);
 
 		/* Relax the lock (might result in it being taken, which is OK!) */
@@ -160,14 +175,13 @@ static unsigned int bfree_recombine(struct sys_mem_pool_base *p, int level,
 		key = pool_irq_lock(p);
 
 		/* Check if we can recombine its superblock, and repeat */
-		if (level == 0 || partner_bits(p, level, bn) != 0xf) {
+		if (level == 0 || partner_alloc_bits(p, level, bn) != 0) {
 			return key;
 		}
 
 		for (i = 0; i < 4; i++) {
 			int b = (bn & ~3) + i;
 
-			clear_free_bit(p, level, b);
 			sys_dlist_remove(block_ptr(p, lsz, b));
 		}
 
@@ -199,13 +213,12 @@ static void *block_break(struct sys_mem_pool_base *p, void *block, int l,
 	int i, bn;
 
 	bn = block_num(p, block, lsizes[l]);
+	set_alloc_bit(p, l + 1, 4*bn);
 
 	for (i = 1; i < 4; i++) {
-		int lbn = 4*bn + i;
 		int lsz = lsizes[l + 1];
 		void *block2 = (lsz * i) + (char *)block;
 
-		set_free_bit(p, l + 1, lbn);
 		sys_dlist_append(&p->levels[l + 1].free_list, block2);
 	}
 
@@ -213,7 +226,7 @@ static void *block_break(struct sys_mem_pool_base *p, void *block, int l,
 }
 
 int z_sys_mem_pool_block_alloc(struct sys_mem_pool_base *p, size_t size,
-			      u32_t *level_p, u32_t *block_p, void **data_p)
+			      uint32_t *level_p, uint32_t *block_p, void **data_p)
 {
 	int i, from_l, alloc_l = -1;
 	unsigned int key;
@@ -287,11 +300,11 @@ int z_sys_mem_pool_block_alloc(struct sys_mem_pool_base *p, size_t size,
 	return 0;
 }
 
-void z_sys_mem_pool_block_free(struct sys_mem_pool_base *p, u32_t level,
-			      u32_t block)
+void z_sys_mem_pool_block_free(struct sys_mem_pool_base *p, uint32_t level,
+			      uint32_t block)
 {
 	size_t lsizes[LVL_ARRAY_SZ(p->n_levels)];
-	int i;
+	uint32_t i;
 
 	/* As in z_sys_mem_pool_block_alloc(), we build a table of level sizes
 	 * to avoid having to store it in precious RAM bytes.
@@ -314,10 +327,14 @@ void z_sys_mem_pool_block_free(struct sys_mem_pool_base *p, u32_t level,
 void *sys_mem_pool_alloc(struct sys_mem_pool *p, size_t size)
 {
 	struct sys_mem_pool_block *blk;
-	u32_t level, block;
+	uint32_t level, block;
 	char *ret;
+	int lock_ret;
 
-	sys_mutex_lock(&p->mutex, K_FOREVER);
+	lock_ret = sys_mutex_lock(&p->mutex, K_FOREVER);
+	CHECKIF(lock_ret != 0) {
+		return NULL;
+	}
 
 	size += WB_UP(sizeof(struct sys_mem_pool_block));
 	if (z_sys_mem_pool_block_alloc(&p->base, size, &level, &block,
@@ -340,6 +357,7 @@ void sys_mem_pool_free(void *ptr)
 {
 	struct sys_mem_pool_block *blk;
 	struct sys_mem_pool *p;
+	int lock_ret;
 
 	if (ptr == NULL) {
 		return;
@@ -349,8 +367,38 @@ void sys_mem_pool_free(void *ptr)
 	blk = (struct sys_mem_pool_block *)ptr;
 	p = blk->pool;
 
-	sys_mutex_lock(&p->mutex, K_FOREVER);
+	lock_ret = sys_mutex_lock(&p->mutex, K_FOREVER);
+	CHECKIF(lock_ret != 0) {
+		return;
+	}
 	z_sys_mem_pool_block_free(&p->base, blk->level, blk->block);
 	sys_mutex_unlock(&p->mutex);
 }
 
+size_t sys_mem_pool_try_expand_inplace(void *ptr, size_t requested_size)
+{
+	struct sys_mem_pool_block *blk;
+	size_t struct_blk_size = WB_UP(sizeof(struct sys_mem_pool_block));
+	size_t block_size, total_requested_size;
+
+	ptr = (char *)ptr - struct_blk_size;
+	blk = (struct sys_mem_pool_block *)ptr;
+
+	/*
+	 * Determine size of previously allocated block by its level.
+	 * Most likely a bit larger than the original allocation
+	 */
+	block_size = blk->pool->base.max_sz;
+	for (int i = 1; i <= blk->level; i++) {
+		block_size = WB_DN(block_size / 4);
+	}
+
+	/* We really need this much memory */
+	total_requested_size = requested_size + struct_blk_size;
+
+	if (block_size >= total_requested_size) {
+		/* size adjustment can occur in-place */
+		return 0;
+	}
+	return block_size - struct_blk_size;
+}

@@ -8,7 +8,9 @@
  * https://www.st.com/resource/en/datasheet/stts751.pdf
  */
 
-#include <sensor.h>
+#define DT_DRV_COMPAT st_stts751
+
+#include <drivers/sensor.h>
 #include <kernel.h>
 #include <device.h>
 #include <init.h>
@@ -18,21 +20,20 @@
 
 #include "stts751.h"
 
-#define LOG_LEVEL CONFIG_SENSOR_LOG_LEVEL
-LOG_MODULE_REGISTER(STTS751);
+LOG_MODULE_REGISTER(STTS751, CONFIG_SENSOR_LOG_LEVEL);
 
-static inline int stts751_set_odr_raw(struct device *dev, u8_t odr)
+static inline int stts751_set_odr_raw(const struct device *dev, uint8_t odr)
 {
-	struct stts751_data *data = dev->driver_data;
+	struct stts751_data *data = dev->data;
 
 	return stts751_temp_data_rate_set(data->ctx, odr);
 }
 
-static int stts751_sample_fetch(struct device *dev,
+static int stts751_sample_fetch(const struct device *dev,
 				enum sensor_channel chan)
 {
-	struct stts751_data *data = dev->driver_data;
-	axis1bit16_t raw_temp;
+	struct stts751_data *data = dev->data;
+	union axis1bit16_t raw_temp;
 
 	__ASSERT_NO_MSG(chan == SENSOR_CHAN_ALL);
 
@@ -47,17 +48,17 @@ static int stts751_sample_fetch(struct device *dev,
 }
 
 static inline void stts751_temp_convert(struct sensor_value *val,
-					s16_t raw_val)
+					int16_t raw_val)
 {
 	val->val1 = raw_val / 256;
-	val->val2 = ((s32_t)raw_val % 256) * 10000;
+	val->val2 = ((int32_t)raw_val % 256) * 10000;
 }
 
-static int stts751_channel_get(struct device *dev,
+static int stts751_channel_get(const struct device *dev,
 			       enum sensor_channel chan,
 			       struct sensor_value *val)
 {
-	struct stts751_data *data = dev->driver_data;
+	struct stts751_data *data = dev->data;
 
 	if (chan == SENSOR_CHAN_AMBIENT_TEMP) {
 		stts751_temp_convert(val, data->sample_temp);
@@ -69,8 +70,8 @@ static int stts751_channel_get(struct device *dev,
 }
 
 static const struct {
-	s32_t rate;
-	s32_t rate_dec;
+	int32_t rate;
+	int32_t rate_dec;
 } stts751_map[] = {
 			{0, 62500},
 			{0, 125000},
@@ -84,7 +85,7 @@ static const struct {
 			{32, 0},
 		};
 
-static int stts751_odr_set(struct device *dev,
+static int stts751_odr_set(const struct device *dev,
 			   const struct sensor_value *val)
 {
 	int odr;
@@ -109,7 +110,8 @@ static int stts751_odr_set(struct device *dev,
 	return 0;
 }
 
-static int stts751_attr_set(struct device *dev, enum sensor_channel chan,
+static int stts751_attr_set(const struct device *dev,
+			    enum sensor_channel chan,
 			    enum sensor_attribute attr,
 			    const struct sensor_value *val)
 {
@@ -138,9 +140,9 @@ static const struct sensor_driver_api stts751_api_funcs = {
 #endif
 };
 
-static int stts751_init_chip(struct device *dev)
+static int stts751_init_chip(const struct device *dev)
 {
-	struct stts751_data *data = dev->driver_data;
+	struct stts751_data *data = dev->data;
 	stts751_id_t chip_id;
 
 	if (stts751_device_id_get(data->ctx, &chip_id) < 0) {
@@ -166,10 +168,12 @@ static int stts751_init_chip(struct device *dev)
 	return 0;
 }
 
-static int stts751_init(struct device *dev)
+static int stts751_init(const struct device *dev)
 {
-	const struct stts751_config * const config = dev->config->config_info;
-	struct stts751_data *data = dev->driver_data;
+	const struct stts751_config * const config = dev->config;
+	struct stts751_data *data = dev->data;
+
+	data->dev = dev;
 
 	data->bus = device_get_binding(config->master_dev_name);
 	if (!data->bus) {
@@ -197,19 +201,20 @@ static int stts751_init(struct device *dev)
 static struct stts751_data stts751_data;
 
 static const struct stts751_config stts751_config = {
-	.master_dev_name = DT_INST_0_ST_STTS751_BUS_NAME,
+	.master_dev_name = DT_INST_BUS_LABEL(0),
 #ifdef CONFIG_STTS751_TRIGGER
-	.event_port	= DT_INST_0_ST_STTS751_DRDY_GPIOS_CONTROLLER,
-	.event_pin	= DT_INST_0_ST_STTS751_DRDY_GPIOS_PIN,
+	.event_port	= DT_INST_GPIO_LABEL(0, drdy_gpios),
+	.event_pin	= DT_INST_GPIO_PIN(0, drdy_gpios),
+	.int_flags	= DT_INST_GPIO_FLAGS(0, drdy_gpios),
 #endif
-#if defined(DT_ST_STTS751_BUS_I2C)
+#if DT_ANY_INST_ON_BUS_STATUS_OKAY(i2c)
 	.bus_init = stts751_i2c_init,
-	.i2c_slv_addr = DT_INST_0_ST_STTS751_BASE_ADDRESS,
+	.i2c_slv_addr = DT_INST_REG_ADDR(0),
 #else
 #error "BUS MACRO NOT DEFINED IN DTS"
 #endif
 };
 
-DEVICE_AND_API_INIT(stts751, DT_INST_0_ST_STTS751_LABEL, stts751_init,
+DEVICE_AND_API_INIT(stts751, DT_INST_LABEL(0), stts751_init,
 		    &stts751_data, &stts751_config, POST_KERNEL,
 		    CONFIG_SENSOR_INIT_PRIORITY, &stts751_api_funcs);

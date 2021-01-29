@@ -28,6 +28,9 @@ LOG_MODULE_REGISTER(net_conn, CONFIG_NET_CONN_LOG_LEVEL);
 #include "connection.h"
 #include "net_stats.h"
 
+/** How long to wait for when cloning multicast packet */
+#define CLONE_TIMEOUT K_MSEC(100)
+
 /** Is this connection used or not */
 #define NET_CONN_IN_USE			BIT(0)
 
@@ -59,7 +62,7 @@ static sys_slist_t conn_used;
 #if (CONFIG_NET_CONN_LOG_LEVEL >= LOG_LEVEL_DBG)
 static inline
 void conn_register_debug(struct net_conn *conn,
-			 u16_t remote_port, u16_t local_port)
+			 uint16_t remote_port, uint16_t local_port)
 {
 	char dst[NET_IPV6_ADDR_LEN];
 	char src[NET_IPV6_ADDR_LEN];
@@ -139,15 +142,16 @@ static void conn_set_unused(struct net_conn *conn)
 }
 
 /* Check if we already have identical connection handler installed. */
-static struct net_conn *conn_find_handler(u16_t proto, u8_t family,
+static struct net_conn *conn_find_handler(uint16_t proto, uint8_t family,
 					  const struct sockaddr *remote_addr,
 					  const struct sockaddr *local_addr,
-					  u16_t remote_port,
-					  u16_t local_port)
+					  uint16_t remote_port,
+					  uint16_t local_port)
 {
 	struct net_conn *conn;
+	struct net_conn *tmp;
 
-	SYS_SLIST_FOR_EACH_CONTAINER(&conn_used, conn, node) {
+	SYS_SLIST_FOR_EACH_CONTAINER_SAFE(&conn_used, conn, tmp, node) {
 		if (conn->proto != proto) {
 			continue;
 		}
@@ -236,17 +240,17 @@ static struct net_conn *conn_find_handler(u16_t proto, u8_t family,
 	return NULL;
 }
 
-int net_conn_register(u16_t proto, u8_t family,
+int net_conn_register(uint16_t proto, uint8_t family,
 		      const struct sockaddr *remote_addr,
 		      const struct sockaddr *local_addr,
-		      u16_t remote_port,
-		      u16_t local_port,
+		      uint16_t remote_port,
+		      uint16_t local_port,
 		      net_conn_cb_t cb,
 		      void *user_data,
 		      struct net_conn_handle **handle)
 {
 	struct net_conn *conn;
-	u8_t flags = 0U;
+	uint8_t flags = 0U;
 
 	conn = conn_find_handler(proto, family, remote_addr, local_addr,
 				 remote_port, local_port);
@@ -310,6 +314,10 @@ int net_conn_register(u16_t proto, u8_t family,
 			   local_addr->sa_family == AF_CAN) {
 			memcpy(&conn->local_addr, local_addr,
 			       sizeof(struct sockaddr_can));
+		} else if (IS_ENABLED(CONFIG_NET_SOCKETS_PACKET) &&
+			   local_addr->sa_family == AF_PACKET) {
+			memcpy(&conn->local_addr, local_addr,
+			       sizeof(struct sockaddr_ll));
 		} else {
 			NET_ERR("Local address family not set");
 			goto error;
@@ -463,8 +471,8 @@ static inline void conn_send_icmp_error(struct net_pkt *pkt)
 
 static bool conn_are_end_points_valid(struct net_pkt *pkt,
 				      union net_ip_header *ip_hdr,
-				      u16_t src_port,
-				      u16_t dst_port)
+				      uint16_t src_port,
+				      uint16_t dst_port)
 {
 	bool my_src_addr = false;
 
@@ -499,15 +507,18 @@ static bool conn_are_end_points_valid(struct net_pkt *pkt,
 
 enum net_verdict net_conn_input(struct net_pkt *pkt,
 				union net_ip_header *ip_hdr,
-				u8_t proto,
+				uint8_t proto,
 				union net_proto_header *proto_hdr)
 {
 	struct net_if *pkt_iface = net_pkt_iface(pkt);
 	struct net_conn *best_match = NULL;
-	s16_t best_rank = -1;
+	bool is_mcast_pkt = false, mcast_pkt_delivered = false;
+	bool is_bcast_pkt = false;
+	bool raw_pkt_delivered = false;
+	int16_t best_rank = -1;
 	struct net_conn *conn;
-	u16_t src_port;
-	u16_t dst_port;
+	uint16_t src_port;
+	uint16_t dst_port;
 
 	if (IS_ENABLED(CONFIG_NET_UDP) && proto == IPPROTO_UDP) {
 		src_port = proto_hdr->udp->src_port;
@@ -516,7 +527,9 @@ enum net_verdict net_conn_input(struct net_pkt *pkt,
 		src_port = proto_hdr->tcp->src_port;
 		dst_port = proto_hdr->tcp->dst_port;
 	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_PACKET)) {
-		if (net_pkt_family(pkt) != AF_PACKET || proto != ETH_P_ALL) {
+		if (net_pkt_family(pkt) != AF_PACKET ||
+		    (!IS_ENABLED(CONFIG_NET_SOCKETS_PACKET_DGRAM) &&
+		     proto != ETH_P_ALL)) {
 			return NET_DROP;
 		}
 
@@ -546,9 +559,37 @@ enum net_verdict net_conn_input(struct net_pkt *pkt,
 		" family %d", net_proto2str(net_pkt_family(pkt), proto), pkt,
 		ntohs(src_port), ntohs(dst_port), net_pkt_family(pkt));
 
+	/* If we receive a packet with multicast destination address, we might
+	 * need to deliver the packet to multiple recipients.
+	 */
+	if (IS_ENABLED(CONFIG_NET_IPV4) && net_pkt_family(pkt) == AF_INET) {
+		if (net_ipv4_is_addr_mcast(&ip_hdr->ipv4->dst)) {
+			is_mcast_pkt = true;
+		} else if (net_if_ipv4_is_addr_bcast(pkt_iface,
+						     &ip_hdr->ipv4->dst)) {
+			is_bcast_pkt = true;
+		}
+	} else if (IS_ENABLED(CONFIG_NET_IPV6) &&
+					   net_pkt_family(pkt) == AF_INET6) {
+		if (net_ipv6_is_addr_mcast(&ip_hdr->ipv6->dst)) {
+			is_mcast_pkt = true;
+		}
+	}
+
 	SYS_SLIST_FOR_EACH_CONTAINER(&conn_used, conn, node) {
-		if (conn->proto != proto) {
-			continue;
+		/* For packet socket data, the proto is set to ETH_P_ALL but
+		 * the listener might have a specific protocol set. This is ok
+		 * and let the packet pass this check in this case.
+		 */
+		if (IS_ENABLED(CONFIG_NET_SOCKETS_PACKET_DGRAM) ||
+		    IS_ENABLED(CONFIG_NET_SOCKETS_PACKET)) {
+			if ((conn->proto != proto) && (proto != ETH_P_ALL)) {
+				continue;
+			}
+		} else {
+			if ((conn->proto != proto)) {
+				continue;
+			}
 		}
 
 		if (conn->family != AF_UNSPEC &&
@@ -598,14 +639,91 @@ enum net_verdict net_conn_input(struct net_pkt *pkt,
 			}
 
 			if (best_rank < NET_CONN_RANK(conn->flags)) {
-				best_rank = NET_CONN_RANK(conn->flags);
-				best_match = conn;
+				struct net_pkt *mcast_pkt;
+
+				if (!is_mcast_pkt) {
+					best_rank = NET_CONN_RANK(conn->flags);
+					best_match = conn;
+
+					continue;
+				}
+
+				/* If we have a multicast packet, and we found
+				 * a match, then deliver the packet immediately
+				 * to the handler. As there might be several
+				 * sockets interested about these, we need to
+				 * clone the received pkt.
+				 */
+
+				NET_DBG("[%p] mcast match found cb %p ud %p",
+					conn, conn->cb,	conn->user_data);
+
+				mcast_pkt = net_pkt_clone(pkt, CLONE_TIMEOUT);
+				if (!mcast_pkt) {
+					goto drop;
+				}
+
+				if (conn->cb(conn, mcast_pkt, ip_hdr,
+					     proto_hdr, conn->user_data) ==
+								NET_DROP) {
+					net_stats_update_per_proto_drop(
+							pkt_iface, proto);
+					net_pkt_unref(mcast_pkt);
+				} else {
+					net_stats_update_per_proto_recv(
+						pkt_iface, proto);
+				}
+
+				mcast_pkt_delivered = true;
 			}
-		} else if (IS_ENABLED(CONFIG_NET_SOCKETS_PACKET) ||
-			   IS_ENABLED(CONFIG_NET_SOCKETS_CAN)) {
+		} else if (IS_ENABLED(CONFIG_NET_SOCKETS_PACKET)) {
+			if (conn->flags & NET_CONN_LOCAL_ADDR_SET) {
+				struct sockaddr_ll *local;
+				struct net_pkt *raw_pkt;
+
+				local = (struct sockaddr_ll *)&conn->local_addr;
+
+				if (local->sll_ifindex !=
+				    net_if_get_by_iface(net_pkt_iface(pkt))) {
+					continue;
+				}
+
+				NET_DBG("[%p] raw match found cb %p ud %p",
+					conn, conn->cb,	conn->user_data);
+
+				raw_pkt = net_pkt_clone(pkt, CLONE_TIMEOUT);
+				if (!raw_pkt) {
+					goto drop;
+				}
+
+				if (conn->cb(conn, raw_pkt, ip_hdr,
+					     proto_hdr, conn->user_data) ==
+								NET_DROP) {
+					net_stats_update_per_proto_drop(
+							pkt_iface, proto);
+					net_pkt_unref(raw_pkt);
+				} else {
+					net_stats_update_per_proto_recv(
+						pkt_iface, proto);
+				}
+
+				raw_pkt_delivered = true;
+			}
+		} else if (IS_ENABLED(CONFIG_NET_SOCKETS_CAN)) {
 			best_rank = 0;
 			best_match = conn;
 		}
+	}
+
+	if ((is_mcast_pkt && mcast_pkt_delivered) || raw_pkt_delivered) {
+		/* As one or more multicast or raw socket packets have already
+		 * been delivered in the loop above, we shall not call the
+		 * callback again here.
+		 */
+
+		net_pkt_unref(pkt);
+
+		return NET_OK;
 	}
 
 	conn = best_match;
@@ -625,16 +743,15 @@ enum net_verdict net_conn_input(struct net_pkt *pkt,
 
 	NET_DBG("No match found.");
 
-	/* If the destination address is multicast address,
-	 * we will not send an ICMP error as that makes no sense.
+	/* Do not send ICMP error for Packet socket as that makes no
+	 * sense here.
 	 */
 	if (IS_ENABLED(CONFIG_NET_IPV6) &&
-	    net_pkt_family(pkt) == AF_INET6 &&
-	    net_ipv6_is_addr_mcast(&ip_hdr->ipv6->dst)) {
+	    net_pkt_family(pkt) == AF_INET6 && is_mcast_pkt) {
 		;
 	} else if (IS_ENABLED(CONFIG_NET_IPV4) &&
 		   net_pkt_family(pkt) == AF_INET &&
-		   net_ipv4_is_addr_mcast(&ip_hdr->ipv4->dst)) {
+		   (is_mcast_pkt || is_bcast_pkt)) {
 		;
 	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_PACKET) &&
 		    net_pkt_family(pkt) == AF_PACKET) {
@@ -643,7 +760,7 @@ enum net_verdict net_conn_input(struct net_pkt *pkt,
 		conn_send_icmp_error(pkt);
 
 		if (IS_ENABLED(CONFIG_NET_TCP) && proto == IPPROTO_TCP) {
-			net_stats_update_tcp_seg_connrst(net_pkt_iface(pkt));
+			net_stats_update_tcp_seg_connrst(pkt_iface);
 		}
 	}
 

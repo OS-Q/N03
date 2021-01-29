@@ -24,7 +24,7 @@ struct unit_test {
 	void (*test)(void);
 	void (*setup)(void);
 	void (*teardown)(void);
-	u32_t thread_options;
+	uint32_t thread_options;
 };
 
 void z_ztest_run_test_suite(const char *name, struct unit_test *suite);
@@ -130,6 +130,38 @@ static inline void unit_test_noop(void)
 #define ztest_user_unit_test(fn) \
 	ztest_user_unit_test_setup_teardown(fn, unit_test_noop, unit_test_noop)
 
+__syscall void z_test_1cpu_start(void);
+__syscall void z_test_1cpu_stop(void);
+
+/**
+ * @brief Define a SMP-unsafe test function
+ *
+ * As ztest_unit_test(), but ensures all test code runs on only
+ * one CPU when in SMP.
+ *
+ * @param fn Test function
+ */
+#ifdef CONFIG_SMP
+#define ztest_1cpu_unit_test(fn)					\
+	ztest_unit_test_setup_teardown(fn, z_test_1cpu_start, z_test_1cpu_stop)
+#else
+#define ztest_1cpu_unit_test(fn) ztest_unit_test(fn)
+#endif
+
+/**
+ * @brief Define a SMP-unsafe test function that should run as a user thread
+ *
+ * As ztest_user_unit_test(), but ensures all test code runs on only
+ * one CPU when in SMP.
+ *
+ * @param fn Test function
+ */
+#ifdef CONFIG_SMP
+#define ztest_1cpu_user_unit_test(fn) \
+	ztest_user_unit_test_setup_teardown(fn, z_test_1cpu_start, z_test_1cpu_stop)
+#else
+#define ztest_1cpu_user_unit_test(fn) ztest_user_unit_test(fn)
+#endif
 
 /* definitions for use with testing application shared memory   */
 #ifdef CONFIG_USERSPACE
@@ -137,7 +169,6 @@ static inline void unit_test_noop(void)
 #define ZTEST_BMEM	K_APP_BMEM(ztest_mem_partition)
 #define ZTEST_SECTION	K_APP_DMEM_SECTION(ztest_mem_partition)
 extern struct k_mem_partition ztest_mem_partition;
-extern struct k_mem_domain ztest_mem_domain;
 #else
 #define ZTEST_DMEM
 #define ZTEST_BMEM
@@ -174,6 +205,9 @@ extern struct k_mem_domain ztest_mem_domain;
 /**
  * @}
  */
+#ifndef ZTEST_UNITTEST
+#include <syscalls/ztest_test.h>
+#endif
 
 #ifdef __cplusplus
 }

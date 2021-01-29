@@ -6,24 +6,9 @@
 
 /dts-v1/;
 
-#include <arc_hsdk.dtsi>
+#include "hsdk.dtsi"
 
 / {
 	model = "hsdk";
 	compatible = "snps,hsdk";
-
-	aliases {
-		uart-0 = &uart0;
-	};
-
-	chosen {
-		zephyr,sram = &ddr0;
-		zephyr,console = &uart0;
-		zephyr,shell-uart = &uart0;
-	};
-};
-
-&uart0 {
-	status = "okay";
-	current-speed = <115200>;
 };

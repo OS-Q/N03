@@ -1,121 +1,83 @@
-/*
- * Copyright (c) 2018 STMicroelectronics
+/* ST Microelectronics LIS2MDL 3-axis magnetometer sensor
  *
- * LIS2MDL mag driver
+ * Copyright (c) 2018-2019 STMicroelectronics
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Datasheet:
+ * https://www.st.com/resource/en/datasheet/lis2mdl.pdf
  */
+
+#define DT_DRV_COMPAT st_lis2mdl
 
 #include <init.h>
 #include <sys/__assert.h>
 #include <sys/byteorder.h>
 #include <drivers/sensor.h>
 #include <string.h>
-
+#include <logging/log.h>
 #include "lis2mdl.h"
 
-struct lis2mdl_data lis2mdl_device_data;
+struct lis2mdl_data lis2mdl_data;
 
-#define LOG_LEVEL CONFIG_SENSOR_LOG_LEVEL
-#include <logging/log.h>
-LOG_MODULE_REGISTER(LIS2MDL);
+LOG_MODULE_REGISTER(LIS2MDL, CONFIG_SENSOR_LOG_LEVEL);
 
 #ifdef CONFIG_LIS2MDL_MAG_ODR_RUNTIME
-static const struct {
-	u16_t odr;
-	u8_t regval;
-	} lis2mdl_odr_reg[] = {
-		{
-			.odr = 10,
-			.regval = LIS2MDL_ODR10_HZ,
-		},
-		{
-			.odr = 20,
-			.regval = LIS2MDL_ODR20_HZ,
-		},
-		{
-			.odr = 50,
-			.regval = LIS2MDL_ODR50_HZ,
-		},
-		{
-			.odr = 100,
-			.regval = LIS2MDL_ODR100_HZ,
-		},
-	};
-
-static int lis2mdl_freq_to_odr_val(u16_t odr)
+static int lis2mdl_set_odr(const struct device *dev,
+			   const struct sensor_value *val)
 {
-	size_t i;
+	struct lis2mdl_data *lis2mdl = dev->data;
+	lis2mdl_odr_t odr;
 
-	for (i = 0; i < ARRAY_SIZE(lis2mdl_odr_reg); i++) {
-		if (odr == lis2mdl_odr_reg[i].odr) {
-			return i;
-		}
+	switch (val->val1) {
+	case 10:
+		odr = LIS2MDL_ODR_10Hz;
+		break;
+	case 20:
+		odr = LIS2MDL_ODR_20Hz;
+		break;
+	case 50:
+		odr = LIS2MDL_ODR_50Hz;
+		break;
+	case 100:
+		odr = LIS2MDL_ODR_100Hz;
+		break;
+	default:
+		return -EINVAL;
 	}
 
-	return -EINVAL;
-}
-
-static int lis2mdl_set_odr(struct device *dev, u16_t odr)
-{
-	int odr_idx;
-	struct lis2mdl_data *lis2mdl = dev->driver_data;
-
-	/* check if power off */
-	if (odr == 0U) {
-		/* power off mag */
-		return i2c_reg_update_byte(lis2mdl->i2c,
-					   lis2mdl->i2c_addr,
-					   LIS2MDL_CFG_REG_A,
-					   LIS2MDL_MAG_MODE_MASK,
-					   LIS2MDL_MD_IDLE1_MODE);
-	}
-
-	odr_idx = lis2mdl_freq_to_odr_val(odr);
-	if (odr_idx < 0) {
-		return odr_idx;
-	}
-
-	return i2c_reg_update_byte(lis2mdl->i2c,
-				   lis2mdl->i2c_addr,
-				   LIS2MDL_CFG_REG_A,
-				   LIS2MDL_ODR_MASK,
-				   lis2mdl_odr_reg[odr_idx].regval);
-}
-#endif /* CONFIG_LIS2MDL_MAG_ODR_RUNTIME */
-
-static int lis2mdl_set_hard_iron(struct device *dev, enum sensor_channel chan,
-				   const struct sensor_value *val)
-{
-	struct lis2mdl_data *lis2mdl = dev->driver_data;
-	u8_t regs = LIS2MDL_OFFSET_X_REG_L;
-	u8_t i;
-	s16_t offs;
-	int ret;
-
-	for (i = 0U; i < LIS2MDL_NUM_AXIS; i++) {
-		offs = sys_cpu_to_le16(val->val1);
-		ret = i2c_burst_write(lis2mdl->i2c, lis2mdl->i2c_addr,
-				      regs, (u8_t *)&offs, sizeof(offs));
-		if (ret < 0) {
-			return ret;
-		}
-
-		regs += sizeof(offs);
-		val++;
+	if (lis2mdl_data_rate_set(lis2mdl->ctx, odr)) {
+		return -EIO;
 	}
 
 	return 0;
 }
+#endif /* CONFIG_LIS2MDL_MAG_ODR_RUNTIME */
 
-static void lis2mdl_channel_get_mag(struct device *dev,
+static int lis2mdl_set_hard_iron(const struct device *dev,
+				   enum sensor_channel chan,
+				   const struct sensor_value *val)
+{
+	struct lis2mdl_data *lis2mdl = dev->data;
+	uint8_t i;
+	union axis3bit16_t offset;
+
+	for (i = 0U; i < 3; i++) {
+		offset.i16bit[i] = sys_cpu_to_le16(val->val1);
+		val++;
+	}
+
+	return lis2mdl_mag_user_offset_set(lis2mdl->ctx, offset.u8bit);
+}
+
+static void lis2mdl_channel_get_mag(const struct device *dev,
 				      enum sensor_channel chan,
 				      struct sensor_value *val)
 {
-	s32_t cval;
+	int32_t cval;
 	int i;
-	u8_t ofs_start, ofs_stop;
-	struct lis2mdl_data *lis2mdl = dev->driver_data;
+	uint8_t ofs_start, ofs_stop;
+	struct lis2mdl_data *lis2mdl = dev->data;
 	struct sensor_value *pval = val;
 
 	switch (chan) {
@@ -134,7 +96,7 @@ static void lis2mdl_channel_get_mag(struct device *dev,
 	}
 
 	for (i = ofs_start; i <= ofs_stop; i++) {
-		cval = lis2mdl->mag[i] * lis2mdl->mag_fs_sensitivity;
+		cval = lis2mdl->mag[i] * 1500;
 		pval->val1 = cval / 1000000;
 		pval->val2 = cval % 1000000;
 		pval++;
@@ -142,16 +104,17 @@ static void lis2mdl_channel_get_mag(struct device *dev,
 }
 
 /* read internal temperature */
-static void lis2mdl_channel_get_temp(struct device *dev,
+static void lis2mdl_channel_get_temp(const struct device *dev,
 				       struct sensor_value *val)
 {
-	struct lis2mdl_data *drv_data = dev->driver_data;
+	struct lis2mdl_data *drv_data = dev->data;
 
 	val->val1 = drv_data->temp_sample / 100;
-	val->val2 = drv_data->temp_sample % 100;
+	val->val2 = (drv_data->temp_sample % 100) * 10000;
 }
 
-static int lis2mdl_channel_get(struct device *dev, enum sensor_channel chan,
+static int lis2mdl_channel_get(const struct device *dev,
+				 enum sensor_channel chan,
 				 struct sensor_value *val)
 {
 	switch (chan) {
@@ -172,14 +135,14 @@ static int lis2mdl_channel_get(struct device *dev, enum sensor_channel chan,
 	return 0;
 }
 
-static int lis2mdl_config(struct device *dev, enum sensor_channel chan,
+static int lis2mdl_config(const struct device *dev, enum sensor_channel chan,
 			    enum sensor_attribute attr,
 			    const struct sensor_value *val)
 {
 	switch (attr) {
 #ifdef CONFIG_LIS2MDL_MAG_ODR_RUNTIME
 	case SENSOR_ATTR_SAMPLING_FREQUENCY:
-		return lis2mdl_set_odr(dev, val->val1);
+		return lis2mdl_set_odr(dev, val);
 #endif /* CONFIG_LIS2MDL_MAG_ODR_RUNTIME */
 	case SENSOR_ATTR_OFFSET:
 		return lis2mdl_set_hard_iron(dev, chan, val);
@@ -191,12 +154,13 @@ static int lis2mdl_config(struct device *dev, enum sensor_channel chan,
 	return 0;
 }
 
-static int lis2mdl_attr_set(struct device *dev,
+static int lis2mdl_attr_set(const struct device *dev,
 			      enum sensor_channel chan,
 			      enum sensor_attribute attr,
 			      const struct sensor_value *val)
 {
 	switch (chan) {
+	case SENSOR_CHAN_ALL:
 	case SENSOR_CHAN_MAGN_X:
 	case SENSOR_CHAN_MAGN_Y:
 	case SENSOR_CHAN_MAGN_Z:
@@ -210,56 +174,45 @@ static int lis2mdl_attr_set(struct device *dev,
 	return 0;
 }
 
-static int lis2mdl_sample_fetch_mag(struct device *dev)
+static int lis2mdl_sample_fetch_mag(const struct device *dev)
 {
-	struct lis2mdl_data *lis2mdl = dev->driver_data;
-
-	union {
-		u8_t raw[LIS2MDL_OUT_REG_SIZE];
-		struct {
-			s16_t m_axis[3];
-		};
-	} buf __aligned(2);
+	struct lis2mdl_data *lis2mdl = dev->data;
+	union axis3bit16_t raw_mag;
 
 	/* fetch raw data sample */
-	if (i2c_burst_read(lis2mdl->i2c, lis2mdl->i2c_addr,
-			   LIS2MDL_OUT_REG, buf.raw,
-			   sizeof(buf)) < 0) {
-		LOG_DBG("Failed to fetch raw mag sample");
+	if (lis2mdl_magnetic_raw_get(lis2mdl->ctx, raw_mag.u8bit) < 0) {
+		LOG_DBG("Failed to read sample");
 		return -EIO;
 	}
 
-	lis2mdl->mag[0] = sys_le16_to_cpu(buf.m_axis[0]);
-	lis2mdl->mag[1] = sys_le16_to_cpu(buf.m_axis[1]);
-	lis2mdl->mag[2] = sys_le16_to_cpu(buf.m_axis[2]);
+	lis2mdl->mag[0] = sys_le16_to_cpu(raw_mag.i16bit[0]);
+	lis2mdl->mag[1] = sys_le16_to_cpu(raw_mag.i16bit[1]);
+	lis2mdl->mag[2] = sys_le16_to_cpu(raw_mag.i16bit[2]);
 
 	return 0;
 }
 
-static int lis2mdl_sample_fetch_temp(struct device *dev)
+static int lis2mdl_sample_fetch_temp(const struct device *dev)
 {
-	struct lis2mdl_data *lis2mdl = dev->driver_data;
-	u16_t temp_raw;
-	s32_t temp;
-	int ret;
+	struct lis2mdl_data *lis2mdl = dev->data;
+	union axis1bit16_t raw_temp;
+	int32_t temp;
 
 	/* fetch raw temperature sample */
-	ret = i2c_burst_read(lis2mdl->i2c, lis2mdl->i2c_addr,
-			     LIS2MDL_TEMP_OUT_L_REG,
-			     (u8_t *)&temp_raw, sizeof(temp_raw));
-	if (ret < 0) {
-		LOG_DBG("Failed to fetch raw temp sample");
+	if (lis2mdl_temperature_raw_get(lis2mdl->ctx, raw_temp.u8bit) < 0) {
+		LOG_DBG("Failed to read sample");
 		return -EIO;
 	}
 
 	/* formula is temp = 25 + (temp / 8) C */
-	temp = (sys_le16_to_cpu(temp_raw) & 0x8FFF);
+	temp = (sys_le16_to_cpu(raw_temp.i16bit) & 0x8FFF);
 	lis2mdl->temp_sample = 2500 + (temp * 100) / 8;
 
 	return 0;
 }
 
-static int lis2mdl_sample_fetch(struct device *dev, enum sensor_channel chan)
+static int lis2mdl_sample_fetch(const struct device *dev,
+				enum sensor_channel chan)
 {
 	switch (chan) {
 	case SENSOR_CHAN_MAGN_X:
@@ -291,78 +244,118 @@ static const struct sensor_driver_api lis2mdl_driver_api = {
 	.channel_get = lis2mdl_channel_get,
 };
 
-static int lis2mdl_init_interface(struct device *dev)
+static int lis2mdl_init_interface(const struct device *dev)
 {
-	const struct lis2mdl_device_config *const config =
-						dev->config->config_info;
-	struct lis2mdl_data *lis2mdl = dev->driver_data;
+	const struct lis2mdl_config *const config = dev->config;
+	struct lis2mdl_data *lis2mdl = dev->data;
 
-	lis2mdl->i2c = device_get_binding(config->master_dev_name);
-	if (!lis2mdl->i2c) {
+	lis2mdl->bus = device_get_binding(config->master_dev_name);
+	if (!lis2mdl->bus) {
 		LOG_DBG("Could not get pointer to %s device",
 			    config->master_dev_name);
 		return -EINVAL;
 	}
 
-	lis2mdl->i2c_addr = config->i2c_addr_config;
-
-	return 0;
+	return config->bus_init(dev);
 }
 
-static const struct lis2mdl_device_config lis2mdl_dev_config = {
-	.master_dev_name = DT_INST_0_ST_LIS2MDL_MAGN_BUS_NAME,
+static const struct lis2mdl_config lis2mdl_dev_config = {
+	.master_dev_name = DT_INST_BUS_LABEL(0),
 #ifdef CONFIG_LIS2MDL_TRIGGER
-	.gpio_name = DT_INST_0_ST_LIS2MDL_MAGN_IRQ_GPIOS_CONTROLLER,
-	.gpio_pin = DT_INST_0_ST_LIS2MDL_MAGN_IRQ_GPIOS_PIN,
+	.gpio_name = DT_INST_GPIO_LABEL(0, irq_gpios),
+	.gpio_pin = DT_INST_GPIO_PIN(0, irq_gpios),
+	.gpio_flags = DT_INST_GPIO_FLAGS(0, irq_gpios),
 #endif  /* CONFIG_LIS2MDL_TRIGGER */
-	.i2c_addr_config = DT_INST_0_ST_LIS2MDL_MAGN_BASE_ADDRESS,
+#if DT_ANY_INST_ON_BUS_STATUS_OKAY(spi)
+	.bus_init = lis2mdl_spi_init,
+	.spi_conf.frequency = DT_INST_PROP(0, spi_max_frequency),
+	.spi_conf.operation = (SPI_OP_MODE_MASTER | SPI_MODE_CPOL |
+			       SPI_MODE_CPHA | SPI_WORD_SET(8) |
+			       SPI_LINES_SINGLE),
+	.spi_conf.slave     = DT_INST_REG_ADDR(0),
+#if DT_INST_SPI_DEV_HAS_CS_GPIOS(0)
+	.gpio_cs_port	    = DT_INST_SPI_DEV_CS_GPIOS_LABEL(0),
+	.cs_gpio	    = DT_INST_SPI_DEV_CS_GPIOS_PIN(0),
+	.cs_gpio_flags	    = DT_INST_SPI_DEV_CS_GPIOS_FLAGS(0),
+
+	.spi_conf.cs        =  &lis2mdl_data.cs_ctrl,
+#else
+	.spi_conf.cs        = NULL,
+#endif
+#elif DT_ANY_INST_ON_BUS_STATUS_OKAY(i2c)
+	.bus_init = lis2mdl_i2c_init,
+	.i2c_slv_addr = DT_INST_REG_ADDR(0),
+#else
+#error "BUS MACRO NOT DEFINED IN DTS"
+#endif
 };
 
-static int lis2mdl_init(struct device *dev)
+static int lis2mdl_init(const struct device *dev)
 {
-	struct lis2mdl_data *lis2mdl = dev->driver_data;
-	u8_t wai;
+	struct lis2mdl_data *lis2mdl = dev->data;
+	uint8_t wai;
+
+	lis2mdl->dev = dev;
 
 	if (lis2mdl_init_interface(dev)) {
 		return -EINVAL;
 	}
 
 	/* check chip ID */
-	if (i2c_reg_read_byte(lis2mdl->i2c, lis2mdl->i2c_addr,
-			      LIS2MDL_WHO_AM_I_REG, &wai) < 0) {
-		LOG_DBG("Failed to read chip ID");
+	if (lis2mdl_device_id_get(lis2mdl->ctx, &wai) < 0) {
 		return -EIO;
 	}
 
-	if (wai != LIS2MDL_WHOAMI_VAL) {
-		LOG_DBG("Invalid chip ID");
+	if (wai != LIS2MDL_ID) {
+		LOG_DBG("Invalid chip ID: %02x\n", wai);
 		return -EINVAL;
 	}
 
 	/* reset sensor configuration */
-	if (i2c_reg_write_byte(lis2mdl->i2c, lis2mdl->i2c_addr,
-			       LIS2MDL_CFG_REG_A, LIS2MDL_SOFT_RST)) {
+	if (lis2mdl_reset_set(lis2mdl->ctx, PROPERTY_ENABLE) < 0) {
+		LOG_DBG("s/w reset failed\n");
 		return -EIO;
 	}
 
 	k_busy_wait(100);
 
+#if CONFIG_LIS2MDL_SPI_FULL_DUPLEX
+	/* After s/w reset set SPI 4wires again if the case */
+	if (lis2mdl_spi_mode_set(lis2mdl->ctx, LIS2MDL_SPI_4_WIRE) < 0) {
+		return -EIO;
+	}
+#endif
+
 	/* enable BDU */
-	if (i2c_reg_update_byte(lis2mdl->i2c, lis2mdl->i2c_addr,
-				LIS2MDL_CFG_REG_C, LIS2MDL_BDU_MASK,
-				LIS2MDL_BDU_BIT)) {
+	if (lis2mdl_block_data_update_set(lis2mdl->ctx, PROPERTY_ENABLE) < 0) {
+		LOG_DBG("setting bdu failed\n");
 		return -EIO;
 	}
 
-	/* set continuous MODE in default ODR, enable temperature comp. */
-	if (i2c_reg_write_byte(lis2mdl->i2c, lis2mdl->i2c_addr,
-			       LIS2MDL_CFG_REG_A,
-			       LIS2MDL_MD_CONT_MODE | LIS2MDL_DEFAULT_ODR |
-			       LIS2MDL_COMP_TEMP_MASK)) {
+	/* Set Output Data Rate */
+	if (lis2mdl_data_rate_set(lis2mdl->ctx, LIS2MDL_ODR_10Hz)) {
+		LOG_DBG("set odr failed\n");
 		return -EIO;
 	}
 
-	lis2mdl->mag_fs_sensitivity = LIS2MDL_SENSITIVITY;
+	/* Set / Reset sensor mode */
+	if (lis2mdl_set_rst_mode_set(lis2mdl->ctx,
+				     LIS2MDL_SENS_OFF_CANC_EVERY_ODR)) {
+		LOG_DBG("reset sensor mode failed\n");
+		return -EIO;
+	}
+
+	/* Enable temperature compensation */
+	if (lis2mdl_offset_temp_comp_set(lis2mdl->ctx, PROPERTY_ENABLE)) {
+		LOG_DBG("enable temp compensation failed\n");
+		return -EIO;
+	}
+
+	/* Set device in continuous mode */
+	if (lis2mdl_operating_mode_set(lis2mdl->ctx, LIS2MDL_CONTINUOUS_MODE)) {
+		LOG_DBG("set continuos mode failed\n");
+		return -EIO;
+	}
 
 #ifdef CONFIG_LIS2MDL_TRIGGER
 	if (lis2mdl_init_interrupt(dev) < 0) {
@@ -374,6 +367,6 @@ static int lis2mdl_init(struct device *dev)
 	return 0;
 }
 
-DEVICE_AND_API_INIT(lis2mdl, DT_INST_0_ST_LIS2MDL_MAGN_LABEL, lis2mdl_init,
-		     &lis2mdl_device_data, &lis2mdl_dev_config, POST_KERNEL,
+DEVICE_AND_API_INIT(lis2mdl, DT_INST_LABEL(0), lis2mdl_init,
+		     &lis2mdl_data, &lis2mdl_dev_config, POST_KERNEL,
 		     CONFIG_SENSOR_INIT_PRIORITY, &lis2mdl_driver_api);

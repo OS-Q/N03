@@ -58,6 +58,12 @@ enum net_context_state {
 /** Remote address set */
 #define NET_CONTEXT_REMOTE_ADDR_SET  BIT(8)
 
+/** Is the socket accepting connections */
+#define NET_CONTEXT_ACCEPTING_SOCK  BIT(9)
+
+/** Is the socket closing / closed */
+#define NET_CONTEXT_CLOSING_SOCK  BIT(10)
+
 struct net_context;
 
 /**
@@ -182,15 +188,13 @@ struct net_tcp;
 
 struct net_conn_handle;
 
-struct tls_context;
-
 /**
  * Note that we do not store the actual source IP address in the context
  * because the address is already be set in the network interface struct.
  * If there is no such source address there, the packet cannot be sent
  * anyway. This saves 12 bytes / context in IPv6.
  */
-struct net_context {
+__net_socket struct net_context {
 	/** User data.
 	 *
 	 *  First member of the structure to let users either have user data
@@ -244,10 +248,15 @@ struct net_context {
 	net_pkt_get_pool_func_t data_pool;
 #endif /* CONFIG_NET_CONTEXT_NET_PKT_POOL */
 
-#if defined(CONFIG_NET_TCP)
+#if defined(CONFIG_NET_TCP1)
 	/** TCP connection information */
 	struct net_tcp *tcp;
-#endif /* CONFIG_NET_TCP */
+#endif /* CONFIG_NET_TCP1 */
+
+#if defined(CONFIG_NET_TCP2)
+	/** TCP connection information */
+	void *tcp;
+#endif /* CONFIG_NET_TCP2 */
 
 #if defined(CONFIG_NET_CONTEXT_SYNC_RECV)
 	/**
@@ -257,16 +266,15 @@ struct net_context {
 #endif /* CONFIG_NET_CONTEXT_SYNC_RECV */
 
 #if defined(CONFIG_NET_SOCKETS)
+	/** BSD socket private data */
+	void *socket_data;
+
 	/** Per-socket packet or connection queues */
 	union {
 		struct k_fifo recv_q;
 		struct k_fifo accept_q;
 	};
 
-#if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
-	/** TLS context information */
-	struct tls_context *tls;
-#endif /* CONFIG_NET_SOCKETS_SOCKOPT_TLS */
 #endif /* CONFIG_NET_SOCKETS */
 
 #if defined(CONFIG_NET_OFFLOAD)
@@ -282,7 +290,7 @@ struct net_context {
 	struct {
 #if defined(CONFIG_NET_CONTEXT_PRIORITY)
 		/** Priority of the network data sent via this net_context */
-		u8_t priority;
+		uint8_t priority;
 #endif
 #if defined(CONFIG_NET_CONTEXT_TIMESTAMP)
 		bool timestamp;
@@ -299,18 +307,18 @@ struct net_context {
 	} options;
 
 	/** Protocol (UDP, TCP or IEEE 802.3 protocol value) */
-	u16_t proto;
+	uint16_t proto;
 
 	/** Flags for the context */
-	u16_t flags;
+	uint16_t flags;
 
 	/** Network interface assigned to this context */
-	s8_t iface;
+	int8_t iface;
 
 	/** IPv6 hop limit or IPv4 ttl for packets sent via this context. */
 	union {
-		u8_t ipv6_hop_limit;
-		u8_t ipv4_ttl;
+		uint8_t ipv6_hop_limit;
+		uint8_t ipv4_ttl;
 	};
 
 #if defined(CONFIG_SOCKS)
@@ -324,6 +332,70 @@ static inline bool net_context_is_used(struct net_context *context)
 	NET_ASSERT(context);
 
 	return context->flags & NET_CONTEXT_IN_USE;
+}
+
+/**
+ * @brief Is this context is accepting data now.
+ *
+ * @param context Network context.
+ *
+ * @return True if the context is accepting connections, False otherwise.
+ */
+static inline bool net_context_is_accepting(struct net_context *context)
+{
+	NET_ASSERT(context);
+
+	return context->flags & NET_CONTEXT_ACCEPTING_SOCK;
+}
+
+/**
+ * @brief Set this context to accept data now.
+ *
+ * @param context Network context.
+ * @param accepting True if accepting, False if not
+ */
+static inline void net_context_set_accepting(struct net_context *context,
+					     bool accepting)
+{
+	NET_ASSERT(context);
+
+	if (accepting) {
+		context->flags |= NET_CONTEXT_ACCEPTING_SOCK;
+	} else {
+		context->flags &= ~NET_CONTEXT_ACCEPTING_SOCK;
+	}
+}
+
+/**
+ * @brief Is this context closing.
+ *
+ * @param context Network context.
+ *
+ * @return True if the context is closing, False otherwise.
+ */
+static inline bool net_context_is_closing(struct net_context *context)
+{
+	NET_ASSERT(context);
+
+	return context->flags & NET_CONTEXT_CLOSING_SOCK;
+}
+
+/**
+ * @brief Set this context to closing.
+ *
+ * @param context Network context.
+ * @param closing True if closing, False if not
+ */
+static inline void net_context_set_closing(struct net_context *context,
+					   bool closing)
+{
+	NET_ASSERT(context);
+
+	if (closing) {
+		context->flags |= NET_CONTEXT_CLOSING_SOCK;
+	} else {
+		context->flags &= ~NET_CONTEXT_CLOSING_SOCK;
+	}
 }
 
 #define NET_CONTEXT_STATE_SHIFT 1
@@ -395,7 +467,7 @@ static inline sa_family_t net_context_get_family(struct net_context *context)
 static inline void net_context_set_family(struct net_context *context,
 					  sa_family_t family)
 {
-	u8_t flag = 0U;
+	uint8_t flag = 0U;
 
 	NET_ASSERT(context);
 
@@ -438,7 +510,7 @@ enum net_sock_type net_context_get_type(struct net_context *context)
 static inline void net_context_set_type(struct net_context *context,
 					enum net_sock_type type)
 {
-	u16_t flag = 0U;
+	uint16_t flag = 0U;
 
 	NET_ASSERT(context);
 
@@ -510,7 +582,7 @@ static inline int net_context_get_filter_id(struct net_context *context)
  *
  * @return Network context IP protocol.
  */
-static inline u16_t net_context_get_ip_proto(struct net_context *context)
+static inline uint16_t net_context_get_ip_proto(struct net_context *context)
 {
 	return context->proto;
 }
@@ -526,7 +598,7 @@ static inline u16_t net_context_get_ip_proto(struct net_context *context)
  * protocol value)
  */
 static inline void net_context_set_ip_proto(struct net_context *context,
-					    u16_t proto)
+					    uint16_t proto)
 {
 	context->proto = proto;
 }
@@ -565,24 +637,24 @@ static inline void net_context_set_iface(struct net_context *context,
 	context->iface = net_if_get_by_iface(iface);
 }
 
-static inline u8_t net_context_get_ipv4_ttl(struct net_context *context)
+static inline uint8_t net_context_get_ipv4_ttl(struct net_context *context)
 {
 	return context->ipv4_ttl;
 }
 
 static inline void net_context_set_ipv4_ttl(struct net_context *context,
-					    u8_t ttl)
+					    uint8_t ttl)
 {
 	context->ipv4_ttl = ttl;
 }
 
-static inline u8_t net_context_get_ipv6_hop_limit(struct net_context *context)
+static inline uint8_t net_context_get_ipv6_hop_limit(struct net_context *context)
 {
 	return context->ipv6_hop_limit;
 }
 
 static inline void net_context_set_ipv6_hop_limit(struct net_context *context,
-						  u8_t hop_limit)
+						  uint8_t hop_limit)
 {
 	context->ipv6_hop_limit = hop_limit;
 }
@@ -631,7 +703,7 @@ static inline bool net_context_is_proxy_enabled(struct net_context *context)
  */
 int net_context_get(sa_family_t family,
 		    enum net_sock_type type,
-		    u16_t ip_proto,
+		    uint16_t ip_proto,
 		    struct net_context **context);
 
 /**
@@ -788,7 +860,7 @@ int net_context_connect(struct net_context *context,
 			const struct sockaddr *addr,
 			socklen_t addrlen,
 			net_context_connect_cb_t cb,
-			s32_t timeout,
+			k_timeout_t timeout,
 			void *user_data);
 
 /**
@@ -818,7 +890,7 @@ int net_context_connect(struct net_context *context,
  */
 int net_context_accept(struct net_context *context,
 		       net_tcp_accept_cb_t cb,
-		       s32_t timeout,
+		       k_timeout_t timeout,
 		       void *user_data);
 
 /**
@@ -844,7 +916,7 @@ int net_context_send(struct net_context *context,
 		     const void *buf,
 		     size_t len,
 		     net_context_send_cb_t cb,
-		     s32_t timeout,
+		     k_timeout_t timeout,
 		     void *user_data);
 
 /**
@@ -874,7 +946,7 @@ int net_context_sendto(struct net_context *context,
 		       const struct sockaddr *dst_addr,
 		       socklen_t addrlen,
 		       net_context_send_cb_t cb,
-		       s32_t timeout,
+		       k_timeout_t timeout,
 		       void *user_data);
 
 /**
@@ -899,7 +971,7 @@ int net_context_sendmsg(struct net_context *context,
 			const struct msghdr *msghdr,
 			int flags,
 			net_context_send_cb_t cb,
-			s32_t timeout,
+			k_timeout_t timeout,
 			void *user_data);
 
 /**
@@ -940,7 +1012,7 @@ int net_context_sendmsg(struct net_context *context,
  */
 int net_context_recv(struct net_context *context,
 		     net_context_recv_cb_t cb,
-		     s32_t timeout,
+		     k_timeout_t timeout,
 		     void *user_data);
 
 /**
@@ -964,7 +1036,7 @@ int net_context_recv(struct net_context *context,
  * @return 0 if ok, < 0 if error
  */
 int net_context_update_recv_wnd(struct net_context *context,
-				s32_t delta);
+				int32_t delta);
 
 enum net_context_option {
 	NET_OPT_PRIORITY	= 1,

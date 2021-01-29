@@ -11,12 +11,12 @@
 # 1.4. board_*
 # 1.5. Misc.
 # 2. Kconfig-aware extensions
-# 2.1 *_if_kconfig
-# 2.2 Misc
+# 2.1 Misc
 # 3. CMake-generic extensions
 # 3.1. *_ifdef
 # 3.2. *_ifndef
 # 3.3. *_option compiler compatibility checks
+# 3.3.1 Toolchain integration
 # 3.4. Debugging CMake
 # 3.5. File system management
 
@@ -132,7 +132,7 @@ endfunction()
 # includes, options).
 #
 # The naming convention follows:
-# zephyr_get_${build_information}_for_lang${format}(lang x [SKIP_PREFIX])
+# zephyr_get_${build_information}_for_lang${format}(lang x [STRIP_PREFIX])
 # Where
 #  the argument 'x' is written with the result
 # and
@@ -151,11 +151,11 @@ endfunction()
 #   - CXX
 #   - ASM
 #
-# SKIP_PREFIX
+# STRIP_PREFIX
 #
 # By default the result will be returned ready to be passed directly
 # to a compiler, e.g. prefixed with -D, or -I, but it is possible to
-# omit this prefix by specifying 'SKIP_PREFIX' . This option has no
+# omit this prefix by specifying 'STRIP_PREFIX' . This option has no
 # effect for 'compile_options'.
 #
 # e.g.
@@ -195,44 +195,51 @@ function(zephyr_get_compile_options_for_lang_as_string lang i)
 endfunction()
 
 function(zephyr_get_include_directories_for_lang lang i)
-  get_property_and_add_prefix(flags zephyr_interface INTERFACE_INCLUDE_DIRECTORIES
-    "-I"
-    ${ARGN}
-    )
+  zephyr_get_parse_args(args ${ARGN})
+  get_property(flags TARGET zephyr_interface PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 
   process_flags(${lang} flags output_list)
+  string(REPLACE ";" "$<SEMICOLON>" genexp_output_list "${output_list}")
 
-  set(${i} ${output_list} PARENT_SCOPE)
+  if(NOT ARGN)
+    set(result_output_list "-I$<JOIN:${genexp_output_list}, -I>")
+  elseif(args_STRIP_PREFIX)
+    # The list has no prefix, so don't add it.
+    set(result_output_list ${output_list})
+  else()
+    set(result_output_list "-I$<JOIN:${genexp_output_list},${ARGN}-I>")
+  endif()
+  set(${i} ${result_output_list} PARENT_SCOPE)
 endfunction()
 
 function(zephyr_get_system_include_directories_for_lang lang i)
-  get_property_and_add_prefix(flags zephyr_interface INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
-    "-isystem"
-    ${ARGN}
-    )
+  get_property(flags TARGET zephyr_interface PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES)
 
   process_flags(${lang} flags output_list)
+  string(REPLACE ";" "$<SEMICOLON>" genexp_output_list "${output_list}")
+  set(result_output_list "$<$<BOOL:${genexp_output_list}>:-isystem$<JOIN:${genexp_output_list}, -isystem>>")
 
-  set(${i} ${output_list} PARENT_SCOPE)
+  set(${i} ${result_output_list} PARENT_SCOPE)
 endfunction()
 
 function(zephyr_get_compile_definitions_for_lang lang i)
-  get_property_and_add_prefix(flags zephyr_interface INTERFACE_COMPILE_DEFINITIONS
-    "-D"
-    ${ARGN}
-    )
+  get_property(flags TARGET zephyr_interface PROPERTY INTERFACE_COMPILE_DEFINITIONS)
 
   process_flags(${lang} flags output_list)
+  string(REPLACE ";" "$<SEMICOLON>" genexp_output_list "${output_list}")
+  set(result_output_list "-D$<JOIN:${genexp_output_list}, -D>")
 
-  set(${i} ${output_list} PARENT_SCOPE)
+  set(${i} ${result_output_list} PARENT_SCOPE)
 endfunction()
 
 function(zephyr_get_compile_options_for_lang lang i)
   get_property(flags TARGET zephyr_interface PROPERTY INTERFACE_COMPILE_OPTIONS)
 
   process_flags(${lang} flags output_list)
+  string(REPLACE ";" "$<SEMICOLON>" genexp_output_list "${output_list}")
+  set(result_output_list " $<JOIN:${genexp_output_list}, >")
 
-  set(${i} ${output_list} PARENT_SCOPE)
+  set(${i} ${result_output_list} PARENT_SCOPE)
 endfunction()
 
 # This function writes a dict to it's output parameter
@@ -253,6 +260,7 @@ function(process_flags lang input output)
   # The flags might contains compile language generator expressions that
   # look like this:
   # $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+  # $<$<COMPILE_LANGUAGE:CXX>:$<OTHER_EXPRESSION>>
   #
   # Flags that don't specify a language like this apply to all
   # languages.
@@ -274,15 +282,34 @@ function(process_flags lang input output)
     set(is_compile_lang_generator_expression 0)
     foreach(l ${languages})
       if(flag MATCHES "<COMPILE_LANGUAGE:${l}>:([^>]+)>")
+        set(updated_flag ${CMAKE_MATCH_1})
         set(is_compile_lang_generator_expression 1)
         if(${l} STREQUAL ${lang})
-          list(APPEND tmp_list ${CMAKE_MATCH_1})
+          # This test will match in case there are more generator expressions in the flag.
+          # As example: $<$<COMPILE_LANGUAGE:C>:$<OTHER_EXPRESSION>>
+          #             $<$<OTHER_EXPRESSION:$<COMPILE_LANGUAGE:C>:something>>
+          string(REGEX MATCH "(\\\$<)[^\\\$]*(\\\$<)[^\\\$]*(\\\$<)" IGNORE_RESULT ${flag})
+          if(CMAKE_MATCH_2)
+            # Nested generator expressions are used, just substitue `$<COMPILE_LANGUAGE:${l}>` to `1`
+            string(REGEX REPLACE "\\\$<COMPILE_LANGUAGE:${l}>" "1" updated_flag ${flag})
+          endif()
+          list(APPEND tmp_list ${updated_flag})
           break()
         endif()
       endif()
     endforeach()
 
     if(NOT is_compile_lang_generator_expression)
+      # SHELL is used to avoid de-deplucation, but when process flags
+      # then this tag must be removed to return real compile/linker flags.
+      if(flag MATCHES "SHELL:[ ]*(.*)")
+        separate_arguments(flag UNIX_COMMAND ${CMAKE_MATCH_1})
+      endif()
+      # Flags may be placed inside generator expression, therefore any flag
+      # which is not already a generator expression must have commas converted.
+      if(NOT flag MATCHES "\\\$<.*>")
+        string(REPLACE "," "$<COMMA>" flag "${flag}")
+      endif()
       list(APPEND tmp_list ${flag})
     endif()
   endforeach()
@@ -344,15 +371,15 @@ endmacro()
 
 # Constructor with a directory-inferred name
 macro(zephyr_library)
-  zephyr_library_get_current_dir_lib_name(lib_name)
+  zephyr_library_get_current_dir_lib_name(${ZEPHYR_BASE} lib_name)
   zephyr_library_named(${lib_name})
 endmacro()
 
-# Determines what the current directory's lib name would be and writes
-# it to the argument "lib_name"
-macro(zephyr_library_get_current_dir_lib_name lib_name)
+# Determines what the current directory's lib name would be according to the
+# provided base and writes it to the argument "lib_name"
+macro(zephyr_library_get_current_dir_lib_name base lib_name)
   # Remove the prefix (/home/sebo/zephyr/driver/serial/CMakeLists.txt => driver/serial/CMakeLists.txt)
-  file(RELATIVE_PATH name ${ZEPHYR_BASE} ${CMAKE_CURRENT_LIST_FILE})
+  file(RELATIVE_PATH name ${base} ${CMAKE_CURRENT_LIST_FILE})
 
   # Remove the filename (driver/serial/CMakeLists.txt => driver/serial)
   get_filename_component(name ${name} DIRECTORY)
@@ -375,6 +402,34 @@ macro(zephyr_library_named name)
   target_link_libraries(${name} PUBLIC zephyr_interface)
 endmacro()
 
+# Provides amend functionality to a Zephyr library for out-of-tree usage.
+#
+# When called from a Zephyr module, the corresponding zephyr library defined
+# within Zephyr will be looked up.
+#
+# Note, in order to ensure correct library when amending, the folder structure in the
+# Zephyr module must resemble the structure used in Zephyr, as example:
+#
+# Example: to amend the zephyr library created in
+# ZEPHYR_BASE/drivers/entropy/CMakeLists.txt
+# add the following file:
+# ZEPHYR_MODULE/drivers/entropy/CMakeLists.txt
+# with content:
+# zephyr_library_amend()
+# zephyr_libray_add_sources(...)
+#
+macro(zephyr_library_amend)
+  # This is a macro because we need to ensure the ZEPHYR_CURRENT_LIBRARY and
+  # following zephyr_library_* calls are executed within the scope of the
+  # caller.
+  if(NOT ZEPHYR_CURRENT_MODULE_DIR)
+    message(FATAL_ERROR "Function only available for Zephyr modules.")
+  endif()
+
+  zephyr_library_get_current_dir_lib_name(${ZEPHYR_CURRENT_MODULE_DIR} lib_name)
+
+  set(ZEPHYR_CURRENT_LIBRARY ${lib_name})
+endmacro()
 
 function(zephyr_link_interface interface)
   target_link_libraries(${interface} INTERFACE zephyr_interface)
@@ -453,6 +508,19 @@ function(zephyr_library_import library_name library_path)
     ${library_path}
     )
   zephyr_append_cmake_library(${library_name})
+endfunction()
+
+# Place the current zephyr library in the application memory partition.
+#
+# The partition argument is the name of the partition where the library shall
+# be placed.
+#
+# Note: Ensure the given partition has been define using
+#       K_APPMEM_PARTITION_DEFINE in source code.
+function(zephyr_library_app_memory partition)
+  set_property(TARGET zephyr_property_target
+               APPEND PROPERTY COMPILE_OPTIONS
+               "-l" $<TARGET_FILE_NAME:${ZEPHYR_CURRENT_LIBRARY}> "${partition}")
 endfunction()
 
 # 1.2.1 zephyr_interface_library_*
@@ -704,18 +772,19 @@ endfunction()
 # caching comes in addition to the caching that CMake does in the
 # build folder's CMakeCache.txt)
 function(zephyr_check_compiler_flag lang option check)
+  # Check if the option is covered by any hardcoded check before doing
+  # an automated test.
+  zephyr_check_compiler_flag_hardcoded(${lang} "${option}" check exists)
+  if(exists)
+    set(check ${check} PARENT_SCOPE)
+    return()
+  endif()
+
   # Locate the cache directory
   set_ifndef(
     ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE_DIR
     ${USER_CACHE_DIR}/ToolchainCapabilityDatabase
     )
-  if(DEFINED ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE)
-    assert(0
-      "The deprecated ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE is now a directory"
-      "and is named ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE_DIR"
-      )
-    # Remove this deprecation warning in version 1.14.
-  endif()
 
   # The toolchain capability database/cache is maintained as a
   # directory of files. The filenames in the directory are keys, and
@@ -754,8 +823,17 @@ function(zephyr_check_compiler_flag lang option check)
     return()
   endif()
 
-  # Test the flag
-  check_compiler_flag(${lang} "${option}" inner_check)
+  # Flags that start with -Wno-<warning> can not be tested by
+  # check_compiler_flag, they will always pass, but -W<warning> can be
+  # tested, so to test -Wno-<warning> flags we test -W<warning>
+  # instead.
+  if("${option}" MATCHES "-Wno-(.*)")
+    set(possibly_translated_option -W${CMAKE_MATCH_1})
+  else()
+    set(possibly_translated_option ${option})
+  endif()
+
+  check_compiler_flag(${lang} "${possibly_translated_option}" inner_check)
 
   set(${check} ${inner_check} PARENT_SCOPE)
 
@@ -798,7 +876,20 @@ function(zephyr_check_compiler_flag lang option check)
   endif()
 endfunction()
 
-# zephyr_linker_sources(<location> <files>)
+function(zephyr_check_compiler_flag_hardcoded lang option check exists)
+  # Various flags that are not supported for CXX may not be testable
+  # because they would produce a warning instead of an error during
+  # the test.  Exclude them by toolchain-specific blacklist.
+  if((${lang} STREQUAL CXX) AND ("${option}" IN_LIST CXX_EXCLUDED_OPTIONS))
+    set(check 0 PARENT_SCOPE)
+    set(exists 1 PARENT_SCOPE)
+  else()
+    # There does not exist a hardcoded check for this option.
+    set(exists 0 PARENT_SCOPE)
+  endif()
+endfunction(zephyr_check_compiler_flag_hardcoded)
+
+# zephyr_linker_sources(<location> [SORT_KEY <sort_key>] <files>)
 #
 # <files> is one or more .ld formatted files whose contents will be
 #    copied/included verbatim into the given <location> in the global linker.ld.
@@ -808,15 +899,21 @@ endfunction()
 #    NOINIT       Inside the noinit output section.
 #    RWDATA       Inside the data output section.
 #    RODATA       Inside the rodata output section.
+#    ROM_START    Inside the first output section of the image. This option is
+#                 currently only available on ARM Cortex-M, ARM Cortex-R,
+#                 x86, ARC, and openisa_rv32m1.
 #    RAM_SECTIONS Inside the RAMABLE_REGION GROUP.
 #    SECTIONS     Near the end of the file. Don't use this when linking into
 #                 RAMABLE_REGION, use RAM_SECTIONS instead.
+# <sort_key> is an optional key to sort by inside of each location. The key must
+#    be alphanumeric, and the keys are sorted alphabetically. If no key is
+#    given, the key 'default' is used. Keys are case-sensitive.
 #
 # Use NOINIT, RWDATA, and RODATA unless they don't work for your use case.
 #
-# When placing into NOINIT, RWDATA, or RODATA, the contents of the files will be
-# placed inside an output section, so assume the section definition is already
-# present, e.g.:
+# When placing into NOINIT, RWDATA, RODATA, ROM_START, the contents of the files
+# will be placed inside an output section, so assume the section definition is
+# already present, e.g.:
 #    _mysection_start = .;
 #    KEEP(*(.mysection));
 #    _mysection_end = .;
@@ -844,6 +941,7 @@ function(zephyr_linker_sources location)
   set(snippet_base      "${__build_dir}/include/generated")
   set(sections_path     "${snippet_base}/snippets-sections.ld")
   set(ram_sections_path "${snippet_base}/snippets-ram-sections.ld")
+  set(rom_start_path    "${snippet_base}/snippets-rom-start.ld")
   set(noinit_path       "${snippet_base}/snippets-noinit.ld")
   set(rwdata_path       "${snippet_base}/snippets-rwdata.ld")
   set(rodata_path       "${snippet_base}/snippets-rodata.ld")
@@ -853,6 +951,7 @@ function(zephyr_linker_sources location)
   if (NOT DEFINED cleared)
     file(WRITE ${sections_path} "")
     file(WRITE ${ram_sections_path} "")
+    file(WRITE ${rom_start_path} "")
     file(WRITE ${noinit_path} "")
     file(WRITE ${rwdata_path} "")
     file(WRITE ${rodata_path} "")
@@ -864,6 +963,8 @@ function(zephyr_linker_sources location)
     set(snippet_path "${sections_path}")
   elseif("${location}" STREQUAL "RAM_SECTIONS")
     set(snippet_path "${ram_sections_path}")
+  elseif("${location}" STREQUAL "ROM_START")
+    set(snippet_path "${rom_start_path}")
   elseif("${location}" STREQUAL "NOINIT")
     set(snippet_path "${noinit_path}")
   elseif("${location}" STREQUAL "RWDATA")
@@ -874,7 +975,13 @@ function(zephyr_linker_sources location)
     message(fatal_error "Must choose valid location for linker snippet.")
   endif()
 
-  foreach(file IN ITEMS ${ARGN})
+  cmake_parse_arguments(L "" "SORT_KEY" "" ${ARGN})
+  set(SORT_KEY default)
+  if(DEFINED L_SORT_KEY)
+    set(SORT_KEY ${L_SORT_KEY})
+  endif()
+
+  foreach(file IN ITEMS ${L_UNPARSED_ARGUMENTS})
     # Resolve path.
     if(IS_ABSOLUTE ${file})
       set(path ${file})
@@ -886,11 +993,18 @@ function(zephyr_linker_sources location)
       message(FATAL_ERROR "zephyr_linker_sources() was called on a directory")
     endif()
 
-    # Append the file contents to the relevant destination file.
-    file(READ ${path} snippet)
-    file(RELATIVE_PATH relpath ${ZEPHYR_BASE} ${path})
-    file(APPEND ${snippet_path}
-             "\n/* From \${ZEPHYR_BASE}/${relpath}: */\n" "${snippet}\n")
+    # Find the relative path to the linker file from the include folder.
+    file(RELATIVE_PATH relpath ${ZEPHYR_BASE}/include ${path})
+
+    # Create strings to be written into the file
+    set (include_str "/* Sort key: \"${SORT_KEY}\" */#include \"${relpath}\"")
+
+    # Add new line to existing lines, sort them, and write them back.
+    file(STRINGS ${snippet_path} lines) # Get current lines (without newlines).
+    list(APPEND lines ${include_str})
+    list(SORT lines)
+    string(REPLACE ";" "\n;" lines "${lines}") # Add newline to each line.
+    file(WRITE ${snippet_path} ${lines} "\n")
   endforeach()
 endfunction(zephyr_linker_sources)
 
@@ -898,9 +1012,12 @@ endfunction(zephyr_linker_sources)
 # Helper function for CONFIG_CODE_DATA_RELOCATION
 # Call this function with 2 arguments file and then memory location
 function(zephyr_code_relocate file location)
+  if(NOT IS_ABSOLUTE ${file})
+    set(file ${CMAKE_CURRENT_SOURCE_DIR}/${file})
+  endif()
   set_property(TARGET code_data_relocation_target
     APPEND PROPERTY COMPILE_DEFINITIONS
-    "${location}:${CMAKE_CURRENT_SOURCE_DIR}/${file}")
+    "${location}:${file}")
 endfunction()
 
 # Usage:
@@ -932,42 +1049,8 @@ endfunction()
 # Kconfig is a configuration language developed for the Linux
 # kernel. The below functions integrate CMake with Kconfig.
 #
-# 2.1 *_if_kconfig
-#
-# Functions for conditionally including directories and source files
-# that have matching KConfig values.
-#
-# zephyr_library_sources_if_kconfig(fft.c)
-# is the same as
-# zephyr_library_sources_ifdef(CONFIG_FFT fft.c)
-#
-# add_subdirectory_if_kconfig(serial)
-# is the same as
-# add_subdirectory_ifdef(CONFIG_SERIAL serial)
-function(add_subdirectory_if_kconfig dir)
-  string(TOUPPER config_${dir} UPPER_CASE_CONFIG)
-  add_subdirectory_ifdef(${UPPER_CASE_CONFIG} ${dir})
-endfunction()
 
-function(target_sources_if_kconfig target scope item)
-  get_filename_component(item_basename ${item} NAME_WE)
-  string(TOUPPER CONFIG_${item_basename} UPPER_CASE_CONFIG)
-  target_sources_ifdef(${UPPER_CASE_CONFIG} ${target} ${scope} ${item})
-endfunction()
-
-function(zephyr_library_sources_if_kconfig item)
-  get_filename_component(item_basename ${item} NAME_WE)
-  string(TOUPPER CONFIG_${item_basename} UPPER_CASE_CONFIG)
-  zephyr_library_sources_ifdef(${UPPER_CASE_CONFIG} ${item})
-endfunction()
-
-function(zephyr_sources_if_kconfig item)
-  get_filename_component(item_basename ${item} NAME_WE)
-  string(TOUPPER CONFIG_${item_basename} UPPER_CASE_CONFIG)
-  zephyr_sources_ifdef(${UPPER_CASE_CONFIG} ${item})
-endfunction()
-
-# 2.2 Misc
+# 2.1 Misc
 #
 # import_kconfig(<prefix> <kconfig_fragment> [<keys>])
 #
@@ -1104,6 +1187,12 @@ function(zephyr_library_sources_ifdef feature_toggle source)
   endif()
 endfunction()
 
+function(zephyr_library_sources_ifndef feature_toggle source)
+  if(NOT ${feature_toggle})
+    zephyr_library_sources(${source} ${ARGN})
+  endif()
+endfunction()
+
 function(zephyr_sources_ifdef feature_toggle)
   if(${${feature_toggle}})
     zephyr_sources(${ARGN})
@@ -1214,7 +1303,7 @@ function(zephyr_compile_options_ifndef feature_toggle)
   endif()
 endfunction()
 
-# 3.2. *_option Compiler-compatibility checks
+# 3.3. *_option Compiler-compatibility checks
 #
 # Utility functions for silently omitting compiler flags when the
 # compiler lacks support. *_cc_option was ported from KBuild, see
@@ -1304,12 +1393,156 @@ function(target_ld_options target scope)
   endforeach()
 endfunction()
 
+# 3.3.1 Toolchain integration
+#
+# 'toolchain_parse_make_rule' is a function that parses the output of
+# 'gcc -M'.
+#
+# The argument 'input_file' is in input parameter with the path to the
+# file with the dependency information.
+#
+# The argument 'include_files' is an output parameter with the result
+# of parsing the include files.
+function(toolchain_parse_make_rule input_file include_files)
+  file(READ ${input_file} input)
+
+  # The file is formatted like this:
+  # empty_file.o: misc/empty_file.c \
+  # nrf52840dk_nrf52840/nrf52840dk_nrf52840.dts \
+  # nrf52840_qiaa.dtsi
+
+  # Get rid of the backslashes
+  string(REPLACE "\\" ";" input_as_list ${input})
+
+  # Pop the first line and treat it specially
+  list(GET input_as_list 0 first_input_line)
+  string(FIND ${first_input_line} ": " index)
+  math(EXPR j "${index} + 2")
+  string(SUBSTRING ${first_input_line} ${j} -1 first_include_file)
+  list(REMOVE_AT input_as_list 0)
+
+  list(APPEND result ${first_include_file})
+
+  # Add the other lines
+  list(APPEND result ${input_as_list})
+
+  # Strip away the newlines and whitespaces
+  list(TRANSFORM result STRIP)
+
+  set(${include_files} ${result} PARENT_SCOPE)
+endfunction()
+
+# 'check_set_linker_property' is a function that check the provided linker
+# flag and only set the linker property if the check succeeds
+#
+# This function is similar in nature to the CMake set_property function, but
+# with the extension that it will check that the linker supports the flag before
+# setting the property.
+#
+# APPEND: Flag indicated that the property should be appended to the existing
+#         value list for the property.
+# TARGET: Name of target on which to add the property (commonly: linker)
+# PROPERTY: Name of property with the value(s) following immediately after
+#           property name
+function(check_set_linker_property)
+  set(options APPEND)
+  set(single_args TARGET)
+  set(multi_args  PROPERTY)
+  cmake_parse_arguments(LINKER_PROPERTY "${options}" "${single_args}" "${multi_args}" ${ARGN})
+
+  if(LINKER_PROPERTY_APPEND)
+   set(APPEND "APPEND")
+  endif()
+
+  list(GET LINKER_PROPERTY_PROPERTY 0 property)
+  list(REMOVE_AT LINKER_PROPERTY_PROPERTY 0)
+  set(option ${LINKER_PROPERTY_PROPERTY})
+
+  string(MAKE_C_IDENTIFIER check${option} check)
+
+  set(SAVED_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} ${option}")
+  zephyr_check_compiler_flag(C "" ${check})
+  set(CMAKE_REQUIRED_FLAGS ${SAVED_CMAKE_REQUIRED_FLAGS})
+
+  if(${check})
+    set_property(TARGET ${LINKER_PROPERTY_TARGET} ${APPEND} PROPERTY ${property} ${option})
+  endif()
+endfunction()
+
+# 'set_compiler_property' is a function that sets the property for the C and
+# C++ property targets used for toolchain abstraction.
+#
+# This function is similar in nature to the CMake set_property function, but
+# with the extension that it will set the property on both the compile and
+# compiler-cpp targets.
+#
+# APPEND: Flag indicated that the property should be appended to the existing
+#         value list for the property.
+# PROPERTY: Name of property with the value(s) following immediately after
+#           property name
+function(set_compiler_property)
+  set(options APPEND)
+  set(multi_args  PROPERTY)
+  cmake_parse_arguments(COMPILER_PROPERTY "${options}" "${single_args}" "${multi_args}" ${ARGN})
+  if(COMPILER_PROPERTY_APPEND)
+   set(APPEND "APPEND")
+   set(APPEND-CPP "APPEND")
+  endif()
+
+  set_property(TARGET compiler ${APPEND} PROPERTY ${COMPILER_PROPERTY_PROPERTY})
+  set_property(TARGET compiler-cpp ${APPEND} PROPERTY ${COMPILER_PROPERTY_PROPERTY})
+endfunction()
+
+# 'check_set_compiler_property' is a function that check the provided compiler
+# flag and only set the compiler or compiler-cpp property if the check succeeds
+#
+# This function is similar in nature to the CMake set_property function, but
+# with the extension that it will check that the compiler supports the flag
+# before setting the property on compiler or compiler-cpp targets.
+#
+# APPEND: Flag indicated that the property should be appended to the existing
+#         value list for the property.
+# PROPERTY: Name of property with the value(s) following immediately after
+#           property name
+function(check_set_compiler_property)
+  set(options APPEND)
+  set(multi_args  PROPERTY)
+  cmake_parse_arguments(COMPILER_PROPERTY "${options}" "${single_args}" "${multi_args}" ${ARGN})
+  if(COMPILER_PROPERTY_APPEND)
+   set(APPEND "APPEND")
+   set(APPEND-CPP "APPEND")
+  endif()
+
+  list(GET COMPILER_PROPERTY_PROPERTY 0 property)
+  list(REMOVE_AT COMPILER_PROPERTY_PROPERTY 0)
+
+  foreach(option ${COMPILER_PROPERTY_PROPERTY})
+    if(CONFIG_CPLUSPLUS)
+      zephyr_check_compiler_flag(CXX ${option} check)
+
+      if(${check})
+        set_property(TARGET compiler-cpp ${APPEND-CPP} PROPERTY ${property} ${option})
+        set(APPEND-CPP "APPEND")
+      endif()
+    endif()
+
+    zephyr_check_compiler_flag(C ${option} check)
+
+    if(${check})
+      set_property(TARGET compiler ${APPEND} PROPERTY ${property} ${option})
+      set(APPEND "APPEND")
+    endif()
+  endforeach()
+endfunction()
+
+
 # 3.4. Debugging CMake
 
 # Usage:
 #   print(BOARD)
 #
-# will print: "BOARD: nrf52_pca10040"
+# will print: "BOARD: nrf52dk_nrf52832"
 function(print arg)
   message(STATUS "${arg}: ${${arg}}")
 endfunction()
@@ -1348,14 +1581,20 @@ macro(assert_exists var)
 endmacro()
 
 function(print_usage)
+  if(NOT CMAKE_MAKE_PROGRAM)
+    # Create dummy project, in order to obtain make program for correct usage printing.
+    project(dummy_print_usage)
+  endif()
   message("see usage:")
   string(REPLACE ";" " " BOARD_ROOT_SPACE_SEPARATED "${BOARD_ROOT}")
   string(REPLACE ";" " " SHIELD_LIST_SPACE_SEPARATED "${SHIELD_LIST}")
   execute_process(
     COMMAND
     ${CMAKE_COMMAND}
+    -DZEPHYR_BASE=${ZEPHYR_BASE}
     -DBOARD_ROOT_SPACE_SEPARATED=${BOARD_ROOT_SPACE_SEPARATED}
     -DSHIELD_LIST_SPACE_SEPARATED=${SHIELD_LIST_SPACE_SEPARATED}
+    -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
     -P ${ZEPHYR_BASE}/cmake/usage/usage.cmake
     )
 endfunction()
@@ -1408,10 +1647,12 @@ function(find_appropriate_cache_directory dir)
     if(DEFINED ENV{${env_var}})
       set(env_dir $ENV{${env_var}})
 
-      check_if_directory_is_writeable(${env_dir} ok)
+      set(test_user_dir ${env_dir}/${env_suffix_${env_var}})
+
+      check_if_directory_is_writeable(${test_user_dir} ok)
       if(${ok})
         # The directory is write-able
-        set(user_dir ${env_dir}/${env_suffix_${env_var}})
+        set(user_dir ${test_user_dir})
         break()
       else()
         # The directory was not writeable, keep looking for a suitable
@@ -1442,4 +1683,93 @@ function(generate_unique_target_name_from_filename filename target_name)
   string(MD5 unique_chars ${filename})
 
   set(${target_name} gen_${x}_${unique_chars} PARENT_SCOPE)
+endfunction()
+
+# Usage:
+#   zephyr_file(<mode> <arg> ...)
+#
+# Zephyr file function extension.
+# This function currently support the following <modes>
+#
+# APPLICATION_ROOT <path>: Check all paths in provided variable, and convert
+#                          those paths that are defined with `-D<path>=<val>`
+#                          to absolute path, relative from `APPLICATION_SOURCE_DIR`
+#                          Issue an error for any relative path not specified
+#                          by user with `-D<path>`
+#
+# returns an updated list of absolute paths
+function(zephyr_file)
+  set(options APPLICATION_ROOT)
+  cmake_parse_arguments(FILE "${options}" "" "" ${ARGN})
+  if(NOT FILE_APPLICATION_ROOT)
+    message(FATAL_ERROR "No <mode> given to `zephyr_file(<mode> <args>...)` function,\n \
+Please provide one of following: APPLICATION_ROOT")
+  endif()
+
+  if(FILE_APPLICATION_ROOT)
+    if(NOT (${ARGC} EQUAL 2))
+      math(EXPR ARGC "${ARGC} - 1")
+      message(FATAL_ERROR "zephyr_file(APPLICATION_ROOT <path-variable>) takes exactly 1 argument, ${ARGC} were given")
+    endif()
+
+    # Note: user can do: `-D<var>=<relative-path>` and app can at same
+    # time specify `list(APPEND <var> <abs-path>)`
+    # Thus need to check and update only CACHED variables (-D<var>).
+    set(CACHED_PATH $CACHE{${ARGV1}})
+    foreach(path ${CACHED_PATH})
+      # The cached variable is relative path, i.e. provided by `-D<var>` or
+      # `set(<var> CACHE)`, so let's update current scope variable to absolute
+      # path from  `APPLICATION_SOURCE_DIR`.
+      if(NOT IS_ABSOLUTE ${path})
+        set(abs_path ${APPLICATION_SOURCE_DIR}/${path})
+        list(FIND ${ARGV1} ${path} index)
+        if(NOT ${index} LESS 0)
+          list(REMOVE_AT ${ARGV1} ${index})
+          list(INSERT ${ARGV1} ${index} ${abs_path})
+        endif()
+      endif()
+    endforeach()
+
+    # Now all cached relative paths has been updated.
+    # Let's check if anyone uses relative path as scoped variable, and fail
+    foreach(path ${${ARGV1}})
+      if(NOT IS_ABSOLUTE ${path})
+        message(FATAL_ERROR
+"Relative path encountered in scoped variable: ${ARGV1}, value=${path}\n \
+Please adjust any `set(${ARGV1} ${path})` or `list(APPEND ${ARGV1} ${path})`\n \
+to absolute path using `\${CMAKE_CURRENT_SOURCE_DIR}/${path}` or similar. \n \
+Relative paths are only allowed with `-D${ARGV1}=<path>`")
+      endif()
+    endforeach()
+
+    # This updates the provided argument in parent scope (callers scope)
+    set(${ARGV1} ${${ARGV1}} PARENT_SCOPE)
+  endif()
+endfunction()
+
+# Usage:
+#   zephyr_get_targets(<directory> <types> <targets>)
+#
+# Get build targets for a given directory and sub-directories.
+#
+# This functions will traverse the build tree, starting from <directory>.
+# It will read the `BUILDSYSTEM_TARGETS` for each directory in the build tree
+# and return the build types matching the <types> list.
+# Example of types: OBJECT_LIBRARY, STATIC_LIBRARY, INTERFACE_LIBRARY, UTILITY.
+#
+# returns a list of targets in <targets> matching the required <types>.
+function(zephyr_get_targets directory types targets)
+    get_property(sub_directories DIRECTORY ${directory} PROPERTY SUBDIRECTORIES)
+    get_property(dir_targets DIRECTORY ${directory} PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(dir_target ${dir_targets})
+      get_property(target_type TARGET ${dir_target} PROPERTY TYPE)
+      if(${target_type} IN_LIST types)
+        list(APPEND ${targets} ${dir_target})
+      endif()
+    endforeach()
+
+    foreach(directory ${sub_directories})
+        zephyr_get_targets(${directory} "${types}" ${targets})
+    endforeach()
+    set(${targets} ${${targets}} PARENT_SCOPE)
 endfunction()

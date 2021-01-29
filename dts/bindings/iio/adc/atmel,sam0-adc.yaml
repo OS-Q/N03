@@ -1,33 +1,48 @@
-#
 # Copyright (c) 2019 Derek Hageman <hageman@inthat.cloud>
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
-title: Atmel SAM0 Family ADC
+description: Atmel SAM0 family ADC
 
-description: >
-    This binding gives a base representation of the Atmel SAM0 ADC
+compatible: "atmel,sam0-adc"
 
-inherits:
-    !include adc.yaml
+include: adc-controller.yaml
 
 properties:
-    compatible:
-      constraint: "atmel,sam0-adc"
-
     reg:
-      category: required
+      required: true
 
     interrupts:
-      category: required
+      required: true
+
+    clocks:
+      required: true
+
+    clock-names:
+      required: true
 
     gclk:
       type: int
-      category: required
+      required: true
       description: generic clock generator source
 
     prescaler:
       type: int
-      category: required
+      required: true
       description: clock prescaler divisor applied to the generic clock
+
+    "#io-channel-cells":
+      const: 1
+
+    calib-offset:
+      type: int
+      required: false
+      description: |
+        bit position offset in NVM SW Calib for start of ADC0 BIASCOMP field.
+        This property is expected to be set on SAM{D,E}5x family of SoCs.
+        For ADC0 this should be 0, and for ADC1 this should be 14.
+      enum:
+        - 0
+        - 14
+
+io-channel-cells:
+    - input

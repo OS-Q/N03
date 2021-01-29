@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#define DT_DRV_COMPAT zephyr_native_posix_uart
+
 #include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -36,14 +38,21 @@
  * emulator to it, if set so from command line.
  */
 
-static int np_uart_stdin_poll_in(struct device *dev, unsigned char *p_char);
-static int np_uart_tty_poll_in(struct device *dev, unsigned char *p_char);
-static void np_uart_poll_out(struct device *dev,
+static int np_uart_stdin_poll_in(const struct device *dev,
+				 unsigned char *p_char);
+static int np_uart_tty_poll_in(const struct device *dev,
+			       unsigned char *p_char);
+static void np_uart_poll_out(const struct device *dev,
 				      unsigned char out_char);
 
 static bool auto_attach;
 static const char default_cmd[] = CONFIG_NATIVE_UART_AUTOATTACH_DEFAULT_CMD;
 static char *auto_attach_cmd;
+
+struct native_uart_status {
+	int out_fd; /* File descriptor used for output */
+	int in_fd; /* File descriptor used for input */
+};
 
 static struct native_uart_status native_uart_status_0;
 
@@ -60,11 +69,6 @@ static struct uart_driver_api np_uart_driver_api_1 = {
 	.poll_in = np_uart_tty_poll_in,
 };
 #endif /* CONFIG_UART_NATIVE_POSIX_PORT_1_ENABLE */
-
-struct native_uart_status {
-	int out_fd; /* File descriptor used for output */
-	int in_fd; /* File descriptor used for input */
-};
 
 #define ERROR posix_print_error_and_exit
 #define WARN posix_print_warning
@@ -194,14 +198,15 @@ static int open_tty(struct native_uart_status *driver_data,
  *
  * @return 0 (if it fails catastrophically, the execution is terminated)
  */
-static int np_uart_0_init(struct device *dev)
+static int np_uart_0_init(const struct device *dev)
 {
 	struct native_uart_status *d;
 
-	d = (struct native_uart_status *)dev->driver_data;
+	d = (struct native_uart_status *)dev->data;
 
 	if (IS_ENABLED(CONFIG_NATIVE_UART_0_ON_OWN_PTY)) {
-		int tty_fn = open_tty(d, DT_UART_0_DEV_NAME, auto_attach);
+		int tty_fn = open_tty(d, DT_INST_LABEL(0),
+				      auto_attach);
 
 		d->in_fd = tty_fn;
 		d->out_fd = tty_fn;
@@ -230,12 +235,12 @@ static int np_uart_0_init(struct device *dev)
  * Initialize the 2nd UART port.
  * This port will be always attached to its own new pseudoterminal.
  */
-static int np_uart_1_init(struct device *dev)
+static int np_uart_1_init(const struct device *dev)
 {
 	struct native_uart_status *d;
 	int tty_fn;
 
-	d = (struct native_uart_status *)dev->driver_data;
+	d = (struct native_uart_status *)dev->data;
 
 	tty_fn = open_tty(d, CONFIG_UART_NATIVE_POSIX_PORT_1_NAME, false);
 
@@ -252,13 +257,13 @@ static int np_uart_1_init(struct device *dev)
  * @param dev UART device struct
  * @param out_char Character to send.
  */
-static void np_uart_poll_out(struct device *dev,
+static void np_uart_poll_out(const struct device *dev,
 				      unsigned char out_char)
 {
 	int ret;
 	struct native_uart_status *d;
 
-	d = (struct native_uart_status *)dev->driver_data;
+	d = (struct native_uart_status *)dev->data;
 	ret = write(d->out_fd, &out_char, 1);
 
 	if (ret != 1) {
@@ -275,7 +280,8 @@ static void np_uart_poll_out(struct device *dev,
  * @retval 0 If a character arrived and was stored in p_char
  * @retval -1 If no character was available to read
  */
-static int np_uart_stdin_poll_in(struct device *dev, unsigned char *p_char)
+static int np_uart_stdin_poll_in(const struct device *dev,
+				 unsigned char *p_char)
 {
 	static bool disconnected;
 
@@ -289,7 +295,7 @@ static int np_uart_stdin_poll_in(struct device *dev, unsigned char *p_char)
 	}
 
 	int n = -1;
-	int in_f = ((struct native_uart_status *)dev->driver_data)->in_fd;
+	int in_f = ((struct native_uart_status *)dev->data)->in_fd;
 
 	int ready;
 	fd_set readfds;
@@ -323,10 +329,11 @@ static int np_uart_stdin_poll_in(struct device *dev, unsigned char *p_char)
  * @retval 0 If a character arrived and was stored in p_char
  * @retval -1 If no character was available to read
  */
-static int np_uart_tty_poll_in(struct device *dev, unsigned char *p_char)
+static int np_uart_tty_poll_in(const struct device *dev,
+			       unsigned char *p_char)
 {
 	int n = -1;
-	int in_f = ((struct native_uart_status *)dev->driver_data)->in_fd;
+	int in_f = ((struct native_uart_status *)dev->data)->in_fd;
 
 	n = read(in_f, p_char, 1);
 	if (n == -1) {
@@ -336,7 +343,7 @@ static int np_uart_tty_poll_in(struct device *dev, unsigned char *p_char)
 }
 
 DEVICE_AND_API_INIT(uart_native_posix0,
-	    DT_UART_0_DEV_NAME, &np_uart_0_init,
+	    DT_INST_LABEL(0), &np_uart_0_init,
 	    (void *)&native_uart_status_0, NULL,
 	    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
 	    &np_uart_driver_api_0);

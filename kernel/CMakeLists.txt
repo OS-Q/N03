@@ -8,9 +8,9 @@ add_library(kernel
   fatal.c
   idle.c
   init.c
+  kheap.c
   mailbox.c
   mem_slab.c
-  mempool.c
   msg_q.c
   mutex.c
   pipes.c
@@ -38,7 +38,21 @@ set_target_properties(
 target_sources_ifdef(CONFIG_STACK_CANARIES        kernel PRIVATE compiler_stack_protect.c)
 target_sources_ifdef(CONFIG_SYS_CLOCK_EXISTS      kernel PRIVATE timeout.c timer.c)
 target_sources_ifdef(CONFIG_ATOMIC_OPERATIONS_C   kernel PRIVATE atomic_c.c)
-target_sources_if_kconfig(                        kernel PRIVATE poll.c)
+target_sources_ifdef(CONFIG_MMU                   kernel PRIVATE mmu.c)
+target_sources_ifdef(CONFIG_POLL                  kernel PRIVATE poll.c)
+
+if(${CONFIG_KERNEL_MEM_POOL})
+  target_sources(kernel PRIVATE mempool.c)
+
+  if(${CONFIG_MEM_POOL_HEAP_BACKEND})
+  else()
+    target_sources(kernel PRIVATE mempool_sys.c)
+  endif()
+endif()
+
+if(NOT CONFIG_MULTITHREADING)
+  message(WARNING "Single threaded mode (CONFIG_MULTITHREADING=n) is deprecated")
+endif()
 
 # The last 2 files inside the target_sources_ifdef should be
 # userspace_handler.c and userspace.c. If not the linker would complain.
@@ -49,11 +63,16 @@ target_sources_ifdef(
   kernel PRIVATE
   futex.c
   mem_domain.c
+  cache_handlers.c
   userspace_handler.c
   userspace.c
   )
 
+target_include_directories(kernel PRIVATE
+  ${ZEPHYR_BASE}/kernel/include
+  ${ARCH_DIR}/${ARCH}/include
+  )
 
-add_dependencies(kernel ${OFFSETS_H_TARGET})
+add_dependencies(kernel zephyr_generated_headers)
 
 target_link_libraries(kernel zephyr_interface)

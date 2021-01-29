@@ -42,6 +42,7 @@ armadeus	ARMadeus Systems SARL
 arrow	Arrow Electronics
 artesyn	Artesyn Embedded Technologies Inc.
 asahi-kasei	Asahi Kasei Corp.
+asmedia	ASMedia Technology Inc.
 aspeed	ASPEED Technology Inc.
 asus	AsusTek Computer Inc.
 atlas	Atlas Scientific LLC
@@ -217,6 +218,7 @@ kosagi	Sutajio Ko-Usagi PTE Ltd.
 kyo	Kyocera Corporation
 lacie	LaCie
 laird	Laird PLC
+lairdconnect	Laird Connectivity
 lantiq	Lantiq Semiconductor
 lattice	Lattice Semiconductor
 lego	LEGO Systems A/S
@@ -229,6 +231,7 @@ linaro	Linaro Limited
 linksys	Belkin International, Inc. (Linksys)
 linux	Linux-specific binding
 linx	Linx Technologies
+litex	LiteX SoC builder
 lltc	Linear Technology Corporation
 logicpd	Logic PD, Inc.
 lsi	LSI Corp. (LSI Logic)
@@ -298,6 +301,7 @@ onnn	ON Semiconductor Corp.
 ontat	On Tat Industrial Company
 opalkelly	Opal Kelly Incorporated
 opencores	OpenCores.org
+openisa	open-isa.org
 openrisc	OpenRISC.io
 option	Option NV
 oranth	Shenzhen Oranth Technology Co., Ltd.
@@ -308,6 +312,7 @@ ovti	OmniVision Technologies
 oxsemi	Oxford Semiconductor, Ltd.
 panasonic	Panasonic Corporation
 parade	Parade Technologies Inc.
+particle	Particle.io
 pda	Precision Design Associates, Inc.
 pericom	Pericom Technology Inc.
 pervasive	Pervasive Displays, Inc.
@@ -332,6 +337,7 @@ qemu	QEMU, a generic and open source machine emulator and virtualizer
 qi	Qi Hardware
 qiaodian	QiaoDian XianShi Corporation
 qnap	QNAP Systems, Inc.
+quicklogic	QuickLogic Corp.
 radxa	Radxa
 raidsonic	RaidSonic Technology GmbH
 ralink	Mediatek/Ralink Technology Corp.
@@ -348,6 +354,7 @@ riscv	RISC-V Foundation
 rockchip	Fuzhou Rockchip Electronics Co., Ltd
 rohm	ROHM Semiconductor Co., Ltd
 roofull	Shenzhen Roofull Technology Co, Ltd
+ruuvi Ruuvi Innovations Ltd (Oy)
 samsung	Samsung Semiconductor
 samtec	Samtec/Softing company
 sancloud	Sancloud Ltd
@@ -438,10 +445,13 @@ virtio	Virtual I/O Device Specification, developed by the OASIS consortium
 vishay	Vishay Intertechnology, Inc
 vitesse	Vitesse Semiconductor Corporation
 vivante	Vivante Corporation
+vnd	A stand-in for a real vendor which can be used in examples and tests
 vocore VoCore Studio
 voipac	Voipac Technologies s.r.o.
 vot	Vision Optical Technology Co., Ltd.
 wd	Western Digital Corp.
+we	Würth Elektronik GmbH.
+weact WeAct Studio
 wetek	WeTek Electronics, limited.
 wexler	Wexler
 whwave  Shenzhen whwave Electronics, Inc.

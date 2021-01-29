@@ -4,19 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#define DT_DRV_COMPAT espressif_esp32_trng
+
 #include <string.h>
 #include <drivers/entropy.h>
 
-static inline u32_t entropy_esp32_get_u32(void)
+static inline uint32_t entropy_esp32_get_u32(void)
 {
-	/* The documentation specifies the random number generator at the
-	 * following address, which is at odds with the SDK, that specifies
-	 * it at 0x60035144.  The fact that they're 0x200c0000 bytes apart
-	 * (lower 16 bits are the same) suggests this might be the same
-	 * register, just mirrored somewhere else in the address space.
-	 * Confirmation is required.
+	/*
+	 * APB Address:   0x60035144 (Safe,slower writes)
+	 * DPORT Address: 0x3ff75144 (write bug, fast writes)
+	 * In this case it won't make a difference because it is read only
+	 * More info available at:
+	 * https://www.esp32.com/viewtopic.php?f=2&t=3033&p=14227
+	 * also check: ECO and Workarounds for Bugs Document, point 3.3
 	 */
-	volatile u32_t *rng_data_reg = (u32_t *)0x3ff75144;
+	volatile uint32_t *rng_data_reg = (uint32_t *)DT_INST_REG_ADDR(0);
 
 	/* Read just once.  This is not optimal as the generator has
 	 * limited throughput due to scarce sources of entropy, specially
@@ -25,10 +28,11 @@ static inline u32_t entropy_esp32_get_u32(void)
 	return *rng_data_reg;
 }
 
-static int entropy_esp32_get_entropy(struct device *device, u8_t *buf, u16_t len)
+static int entropy_esp32_get_entropy(const struct device *device,
+				     uint8_t *buf, uint16_t len)
 {
 	while (len) {
-		u32_t v = entropy_esp32_get_u32();
+		uint32_t v = entropy_esp32_get_u32();
 
 		if (len >= sizeof(v)) {
 			memcpy(buf, &v, sizeof(v));
@@ -44,7 +48,7 @@ static int entropy_esp32_get_entropy(struct device *device, u8_t *buf, u16_t len
 	return 0;
 }
 
-static int entropy_esp32_init(struct device *device)
+static int entropy_esp32_init(const struct device *device)
 {
 	return 0;
 }
@@ -53,7 +57,7 @@ static struct entropy_driver_api entropy_esp32_api_funcs = {
 	.get_entropy = entropy_esp32_get_entropy
 };
 
-DEVICE_AND_API_INIT(entropy_esp32, CONFIG_ENTROPY_NAME,
+DEVICE_AND_API_INIT(entropy_esp32, DT_INST_LABEL(0),
 		    entropy_esp32_init, NULL, NULL,
 		    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
 		    &entropy_esp32_api_funcs);

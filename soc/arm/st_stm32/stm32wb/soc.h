@@ -17,15 +17,16 @@
 #ifndef _STM32WBX_SOC_H_
 #define _STM32WBX_SOC_H_
 
+#include <sys/util.h>
+
 #ifndef _ASMLANGUAGE
 
 #include <stm32wbxx.h>
 
-/* ARM CMSIS definitions must be included before kernel_includes.h.
- * Therefore, it is essential to include kernel_includes.h after including
- * core SOC-specific headers.
- */
-#include <kernel_includes.h>
+/* Add include for DTS generated information */
+#include <devicetree.h>
+
+#include <stm32wbxx_ll_hsem.h>
 
 #ifdef CONFIG_GPIO_STM32
 #include <stm32wbxx_ll_gpio.h>
@@ -50,12 +51,13 @@
 #include <stm32wbxx_ll_system.h>
 #endif /* CONFIG_CLOCK_CONTROL_STM32_CUBE */
 
-#ifdef CONFIG_FLASH
+#if defined(CONFIG_FLASH) || defined(CONFIG_USB)
 #include <stm32wbxx_ll_hsem.h>
-#endif /* CONFIG_FLASH */
-#ifdef CONFIG_I2C
+#endif /* CONFIG_FLASH || CONFIG_USB */
+
+#ifdef CONFIG_I2C_STM32
 #include <stm32wbxx_ll_i2c.h>
-#endif
+#endif /* CONFIG_I2C_STM32 */
 
 #ifdef CONFIG_SPI_STM32
 #include <stm32wbxx_ll_spi.h>
@@ -63,7 +65,32 @@
 
 #ifdef CONFIG_ADC_STM32
 #include <stm32wbxx_ll_adc.h>
+#endif /* CONFIG_ADC_STM32 */
+
+#ifdef CONFIG_IWDG_STM32
+#include <stm32wbxx_ll_iwdg.h>
+#endif /* CONFIG_IWDG_STM32 */
+
+#ifdef CONFIG_WWDG_STM32
+#include <stm32wbxx_ll_wwdg.h>
 #endif
+
+#ifdef CONFIG_STM32_LPTIM_TIMER
+#include <stm32wbxx_ll_lptim.h>
+#include <stm32wbxx_ll_system.h>
+#endif
+
+#ifdef CONFIG_DMA_STM32
+#include <stm32wbxx_ll_dma.h>
+#endif
+
+#ifdef CONFIG_DMAMUX_STM32
+#include <stm32wbxx_ll_dmamux.h>
+#endif
+
+#ifdef CONFIG_PWM_STM32
+#include <stm32wbxx_ll_tim.h>
+#endif /* CONFIG_PWM_STM32 */
 
 #endif /* !_ASMLANGUAGE */
 

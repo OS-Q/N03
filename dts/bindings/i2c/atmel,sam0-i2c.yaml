@@ -1,28 +1,38 @@
-#
 # Copyright (c) 2019 Derek Hageman <hageman@inthat.cloud>
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
-title: Atmel SAM0 series SERCOM I2C controller
+description: Atmel SAM0 series SERCOM I2C node
 
-description: >
-    This is a representation of the Atmel SAM0 series SERCOM I2C nodes
+compatible: "atmel,sam0-i2c"
 
-inherits:
-    !include i2c.yaml
+include: i2c-controller.yaml
 
 properties:
-    compatible:
-      constraint: "atmel,sam0-i2c"
-
     reg:
-      category: required
+      required: true
 
     interrupts:
-      category: required
+      required: true
 
-    dma:
-      type: int
-      category: optional
-      description: DMA channel
+    clocks:
+      required: true
+
+    clock-names:
+      required: true
+
+    dmas:
+      description: |
+        Optional TX & RX dma specifiers.  Each specifier will have a phandle
+        reference to the dmac controller, the channel number, and peripheral
+        trigger source.
+
+        For example dmas for TX, RX on SERCOM3
+           dmas = <&dmac 0 0xb>, <&dmac 0 0xa>;
+
+    dma-names:
+      description: |
+        Required if the dmas property exists.  This should be "tx" and "rx"
+        to match the dmas property.
+
+        For example
+           dma-names = "tx", "rx";

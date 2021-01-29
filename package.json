@@ -1,7 +1,16 @@
 {
-	"description": "Q Framework zephyr RTOS",
-	"name": "framework-N03",
-	"system": "*",
-	"url": "https://www.zephyrproject.org/",
-	"version": "1.0.0"
+  "name": "framework-zephyr",
+  "version": "2.20400.201210",
+  "description": "Zephyr is a new generation, scalable, optimized, secure RTOS for multiple hardware architectures",
+  "keywords": [
+    "framework",
+    "rtos",
+    "hal"
+  ],
+  "homepage": "https://www.zephyrproject.org",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zephyrproject-rtos/zephyr"
+  }
 }

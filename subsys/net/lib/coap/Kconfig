@@ -1,10 +1,7 @@
-# Kconfig - CoAP implementation for Zephyr
+# CoAP implementation for Zephyr
 
-#
 # Copyright (c) 2017 Intel Corporation
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 config COAP
 	bool "CoAP Support"
@@ -61,6 +58,13 @@ config COAP_INIT_ACK_TIMEOUT_MS
 	range 2345 100000
 	help
 	  This value is used as a base value to retry pending CoAP packets.
+
+config COAP_URI_WILDCARD
+	bool "Enable wildcards in CoAP resource path"
+	default y
+	help
+	  This option enables MQTT-style wildcards in path. Disable it if
+	  resource path may contain plus or hash symbol.
 
 module = COAP
 module-dep = NET_LOG

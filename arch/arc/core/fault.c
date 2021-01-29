@@ -16,109 +16,88 @@
 #include <inttypes.h>
 
 #include <kernel.h>
+#include <kernel_internal.h>
 #include <kernel_structs.h>
 #include <exc_handle.h>
-#include <logging/log_ctrl.h>
-
+#include <logging/log.h>
+LOG_MODULE_DECLARE(os);
 
 #ifdef CONFIG_USERSPACE
-Z_EXC_DECLARE(z_arch_user_string_nlen);
+Z_EXC_DECLARE(z_arc_user_string_nlen);
 
 static const struct z_exc_handle exceptions[] = {
-	Z_EXC_HANDLE(z_arch_user_string_nlen)
+	Z_EXC_HANDLE(z_arc_user_string_nlen)
 };
 #endif
 
 #if defined(CONFIG_MPU_STACK_GUARD)
-
-#define IS_MPU_GUARD_VIOLATION(guard_start, fault_addr, stack_ptr) \
-	((fault_addr >= guard_start) && \
-	(fault_addr < (guard_start + STACK_GUARD_SIZE)) && \
-	(stack_ptr <= (guard_start + STACK_GUARD_SIZE)))
-
 /**
  * @brief Assess occurrence of current thread's stack corruption
  *
- * This function performs an assessment whether a memory fault (on a
- * given memory address) is the result of stack memory corruption of
- * the current thread.
+ * This function performs an assessment whether a memory fault (on a given
+ * memory address) is the result of a stack overflow of the current thread.
  *
- * Thread stack corruption for supervisor threads or user threads in
- * privilege mode (when User Space is supported) is reported upon an
- * attempt to access the stack guard area (if MPU Stack Guard feature
- * is supported). Additionally the current thread stack pointer
- * must be pointing inside or below the guard area.
- *
- * Thread stack corruption for user threads in user mode is reported,
- * if the current stack pointer is pointing below the start of the current
- * thread's stack.
- *
- * Notes:
- * - we assume a fully descending stack,
- * - we assume a stacking error has occurred,
- * - the function shall be called when handling MPU privilege violation
- *
- * If stack corruption is detected, the function returns the lowest
- * allowed address where the Stack Pointer can safely point to, to
- * prevent from errors when un-stacking the corrupted stack frame
- * upon exception return.
+ * When called, we know at this point that we received an ARC
+ * protection violation, with any cause code, with the protection access
+ * error either "MPU" or "Secure MPU". In other words, an MPU fault of
+ * some kind. Need to determine whether this is a general MPU access
+ * exception or the specific case of a stack overflow.
  *
  * @param fault_addr memory address on which memory access violation
  *                   has been reported.
  * @param sp stack pointer when exception comes out
- *
- * @return The lowest allowed stack frame pointer, if error is a
- *         thread stack corruption, otherwise return 0.
+ * @retval True if this appears to be a stack overflow
+ * @retval False if this does not appear to be a stack overflow
  */
-static u32_t z_check_thread_stack_fail(const u32_t fault_addr, u32_t sp)
+static bool z_check_thread_stack_fail(const uint32_t fault_addr, uint32_t sp)
 {
 	const struct k_thread *thread = _current;
+	uint32_t guard_end, guard_start;
 
 	if (!thread) {
-		return 0;
+		/* TODO: Under what circumstances could we get here ? */
+		return false;
 	}
-#if defined(CONFIG_USERSPACE)
-	if (thread->arch.priv_stack_start) {
-		/* User thread */
-		if (z_arc_v2_aux_reg_read(_ARC_V2_ERSTATUS)
-			& _ARC_V2_STATUS32_U) {
-			/* Thread's user stack corruption */
-#ifdef CONFIG_ARC_HAS_SECURE
-			sp = z_arc_v2_aux_reg_read(_ARC_V2_SEC_U_SP);
-#else
-			sp = z_arc_v2_aux_reg_read(_ARC_V2_USER_SP);
-#endif
-			if (sp <= (u32_t)thread->stack_obj) {
-				return (u32_t)thread->stack_obj;
-			}
+
+#ifdef CONFIG_USERSPACE
+	if ((thread->base.user_options & K_USER) != 0) {
+		if ((z_arc_v2_aux_reg_read(_ARC_V2_ERSTATUS) &
+		     _ARC_V2_STATUS32_U) != 0) {
+			/* Normal user mode context. There is no specific
+			 * "guard" installed in this case, instead what's
+			 * happening is that the stack pointer is crashing
+			 * into the privilege mode stack buffer which
+			 * immediately precededs it.
+			 */
+			guard_end = thread->stack_info.start;
+			guard_start = (uint32_t)thread->stack_obj;
 		} else {
-			/* User thread in privilege mode */
-			if (IS_MPU_GUARD_VIOLATION(
-			thread->arch.priv_stack_start - STACK_GUARD_SIZE,
-			fault_addr, sp)) {
-				/* Thread's privilege stack corruption */
-				return thread->arch.priv_stack_start;
-			}
+			/* Special case: handling a syscall on privilege stack.
+			 * There is guard memory reserved immediately before
+			 * it.
+			 */
+			guard_end = thread->arch.priv_stack_start;
+			guard_start = guard_end - Z_ARC_STACK_GUARD_SIZE;
 		}
-	} else {
-		/* Supervisor thread */
-		if (IS_MPU_GUARD_VIOLATION((u32_t)thread->stack_obj,
-			fault_addr, sp)) {
-			/* Supervisor thread stack corruption */
-			return (u32_t)thread->stack_obj + STACK_GUARD_SIZE;
-		}
-	}
-#else /* CONFIG_USERSPACE */
-	if (IS_MPU_GUARD_VIOLATION(thread->stack_info.start,
-			fault_addr, sp)) {
-		/* Thread stack corruption */
-		return thread->stack_info.start + STACK_GUARD_SIZE;
-	}
+	} else
 #endif /* CONFIG_USERSPACE */
+	{
+		/* Supervisor thread */
+		guard_end = thread->stack_info.start;
+		guard_start = guard_end - Z_ARC_STACK_GUARD_SIZE;
+	}
 
-	return 0;
+	 /* treat any MPU exceptions within the guard region as a stack
+	  * overflow if the stack pointer is at or below the end of the guard
+	  * region.
+	  */
+	if (sp <= guard_end && fault_addr < guard_end &&
+	    fault_addr >= guard_start) {
+		return true;
+	}
+
+	return false;
 }
-
 #endif
 
 #ifdef CONFIG_ARC_EXCEPTION_DEBUG
@@ -128,7 +107,7 @@ static u32_t z_check_thread_stack_fail(const u32_t fault_addr, u32_t sp)
  * These codes and parameters do not have associated* names in
  * the technical manual, just switch on the values in Table 6-5
  */
-static const char *get_protv_access_err(u32_t parameter)
+static const char *get_protv_access_err(uint32_t parameter)
 {
 	switch (parameter) {
 	case 0x1:
@@ -150,148 +129,148 @@ static const char *get_protv_access_err(u32_t parameter)
 	}
 }
 
-static void dump_protv_exception(u32_t cause, u32_t parameter)
+static void dump_protv_exception(uint32_t cause, uint32_t parameter)
 {
 	switch (cause) {
 	case 0x0:
-		z_fatal_print("Instruction fetch violation (%s)",
-			      get_protv_access_err(parameter));
+		LOG_ERR("Instruction fetch violation (%s)",
+			get_protv_access_err(parameter));
 		break;
 	case 0x1:
-		z_fatal_print("Memory read protection violation (%s)",
-			      get_protv_access_err(parameter));
+		LOG_ERR("Memory read protection violation (%s)",
+			get_protv_access_err(parameter));
 		break;
 	case 0x2:
-		z_fatal_print("Memory write protection violation (%s)",
-			      get_protv_access_err(parameter));
+		LOG_ERR("Memory write protection violation (%s)",
+			get_protv_access_err(parameter));
 		break;
 	case 0x3:
-		z_fatal_print("Memory read-modify-write violation (%s)",
-			      get_protv_access_err(parameter));
+		LOG_ERR("Memory read-modify-write violation (%s)",
+			get_protv_access_err(parameter));
 		break;
 	case 0x10:
-		z_fatal_print("Normal vector table in secure memory");
+		LOG_ERR("Normal vector table in secure memory");
 		break;
 	case 0x11:
-		z_fatal_print("NS handler code located in S memory");
+		LOG_ERR("NS handler code located in S memory");
 		break;
 	case 0x12:
-		z_fatal_print("NSC Table Range Violation");
+		LOG_ERR("NSC Table Range Violation");
 		break;
 	default:
-		z_fatal_print("unknown");
+		LOG_ERR("unknown");
 		break;
 	}
 }
 
-static void dump_machine_check_exception(u32_t cause, u32_t parameter)
+static void dump_machine_check_exception(uint32_t cause, uint32_t parameter)
 {
 	switch (cause) {
 	case 0x0:
-		z_fatal_print("double fault");
+		LOG_ERR("double fault");
 		break;
 	case 0x1:
-		z_fatal_print("overlapping TLB entries");
+		LOG_ERR("overlapping TLB entries");
 		break;
 	case 0x2:
-		z_fatal_print("fatal TLB error");
+		LOG_ERR("fatal TLB error");
 		break;
 	case 0x3:
-		z_fatal_print("fatal cache error");
+		LOG_ERR("fatal cache error");
 		break;
 	case 0x4:
-		z_fatal_print("internal memory error on instruction fetch");
+		LOG_ERR("internal memory error on instruction fetch");
 		break;
 	case 0x5:
-		z_fatal_print("internal memory error on data fetch");
+		LOG_ERR("internal memory error on data fetch");
 		break;
 	case 0x6:
-		z_fatal_print("illegal overlapping MPU entries");
+		LOG_ERR("illegal overlapping MPU entries");
 		if (parameter == 0x1) {
-			z_fatal_print(" - jump and branch target");
+			LOG_ERR(" - jump and branch target");
 		}
 		break;
 	case 0x10:
-		z_fatal_print("secure vector table not located in secure memory");
+		LOG_ERR("secure vector table not located in secure memory");
 		break;
 	case 0x11:
-		z_fatal_print("NSC jump table not located in secure memory");
+		LOG_ERR("NSC jump table not located in secure memory");
 		break;
 	case 0x12:
-		z_fatal_print("secure handler code not located in secure memory");
+		LOG_ERR("secure handler code not located in secure memory");
 		break;
 	case 0x13:
-		z_fatal_print("NSC target address not located in secure memory");
+		LOG_ERR("NSC target address not located in secure memory");
 		break;
 	case 0x80:
-		z_fatal_print("uncorrectable ECC or parity error in vector memory");
+		LOG_ERR("uncorrectable ECC or parity error in vector memory");
 		break;
 	default:
-		z_fatal_print("unknown");
+		LOG_ERR("unknown");
 		break;
 	}
 }
 
-static void dump_privilege_exception(u32_t cause, u32_t parameter)
+static void dump_privilege_exception(uint32_t cause, uint32_t parameter)
 {
 	switch (cause) {
 	case 0x0:
-		z_fatal_print("Privilege violation");
+		LOG_ERR("Privilege violation");
 		break;
 	case 0x1:
-		z_fatal_print("disabled extension");
+		LOG_ERR("disabled extension");
 		break;
 	case 0x2:
-		z_fatal_print("action point hit");
+		LOG_ERR("action point hit");
 		break;
 	case 0x10:
 		switch (parameter) {
 		case 0x1:
-			z_fatal_print("N to S return using incorrect return mechanism");
+			LOG_ERR("N to S return using incorrect return mechanism");
 			break;
 		case 0x2:
-			z_fatal_print("N to S return with incorrect operating mode");
+			LOG_ERR("N to S return with incorrect operating mode");
 			break;
 		case 0x3:
-			z_fatal_print("IRQ/exception return fetch from wrong mode");
+			LOG_ERR("IRQ/exception return fetch from wrong mode");
 			break;
 		case 0x4:
-			z_fatal_print("attempt to halt secure processor in NS mode");
+			LOG_ERR("attempt to halt secure processor in NS mode");
 			break;
 		case 0x20:
-			z_fatal_print("attempt to access secure resource from normal mode");
+			LOG_ERR("attempt to access secure resource from normal mode");
 			break;
 		case 0x40:
-			z_fatal_print("SID violation on resource access (APEX/UAUX/key NVM)");
+			LOG_ERR("SID violation on resource access (APEX/UAUX/key NVM)");
 			break;
 		default:
-			z_fatal_print("unknown");
+			LOG_ERR("unknown");
 			break;
 		}
 		break;
 	case 0x13:
 		switch (parameter) {
 		case 0x20:
-			z_fatal_print("attempt to access secure APEX feature from NS mode");
+			LOG_ERR("attempt to access secure APEX feature from NS mode");
 			break;
 		case 0x40:
-			z_fatal_print("SID violation on access to APEX feature");
+			LOG_ERR("SID violation on access to APEX feature");
 			break;
 		default:
-			z_fatal_print("unknown");
+			LOG_ERR("unknown");
 			break;
 		}
 		break;
 	default:
-		z_fatal_print("unknown");
+		LOG_ERR("unknown");
 		break;
 	}
 }
 
-static void dump_exception_info(u32_t vector, u32_t cause, u32_t parameter)
+static void dump_exception_info(uint32_t vector, uint32_t cause, uint32_t parameter)
 {
 	if (vector >= 0x10 && vector <= 0xFF) {
-		z_fatal_print("interrupt %u", vector);
+		LOG_ERR("interrupt %u", vector);
 		return;
 	}
 
@@ -300,55 +279,55 @@ static void dump_exception_info(u32_t vector, u32_t cause, u32_t parameter)
 	 */
 	switch (vector) {
 	case ARC_EV_RESET:
-		z_fatal_print("Reset");
+		LOG_ERR("Reset");
 		break;
 	case ARC_EV_MEM_ERROR:
-		z_fatal_print("Memory Error");
+		LOG_ERR("Memory Error");
 		break;
 	case ARC_EV_INS_ERROR:
-		z_fatal_print("Instruction Error");
+		LOG_ERR("Instruction Error");
 		break;
 	case ARC_EV_MACHINE_CHECK:
-		z_fatal_print("EV_MachineCheck");
+		LOG_ERR("EV_MachineCheck");
 		dump_machine_check_exception(cause, parameter);
 		break;
 	case ARC_EV_TLB_MISS_I:
-		z_fatal_print("EV_TLBMissI");
+		LOG_ERR("EV_TLBMissI");
 		break;
 	case ARC_EV_TLB_MISS_D:
-		z_fatal_print("EV_TLBMissD");
+		LOG_ERR("EV_TLBMissD");
 		break;
 	case ARC_EV_PROT_V:
-		z_fatal_print("EV_ProtV");
+		LOG_ERR("EV_ProtV");
 		dump_protv_exception(cause, parameter);
 		break;
 	case ARC_EV_PRIVILEGE_V:
-		z_fatal_print("EV_PrivilegeV");
+		LOG_ERR("EV_PrivilegeV");
 		dump_privilege_exception(cause, parameter);
 		break;
 	case ARC_EV_SWI:
-		z_fatal_print("EV_SWI");
+		LOG_ERR("EV_SWI");
 		break;
 	case ARC_EV_TRAP:
-		z_fatal_print("EV_Trap");
+		LOG_ERR("EV_Trap");
 		break;
 	case ARC_EV_EXTENSION:
-		z_fatal_print("EV_Extension");
+		LOG_ERR("EV_Extension");
 		break;
 	case ARC_EV_DIV_ZERO:
-		z_fatal_print("EV_DivZero");
+		LOG_ERR("EV_DivZero");
 		break;
 	case ARC_EV_DC_ERROR:
-		z_fatal_print("EV_DCError");
+		LOG_ERR("EV_DCError");
 		break;
 	case ARC_EV_MISALIGNED:
-		z_fatal_print("EV_Misaligned");
+		LOG_ERR("EV_Misaligned");
 		break;
 	case ARC_EV_VEC_UNIT:
-		z_fatal_print("EV_VecUnit");
+		LOG_ERR("EV_VecUnit");
 		break;
 	default:
-		z_fatal_print("unknown");
+		LOG_ERR("unknown");
 		break;
 	}
 }
@@ -362,19 +341,19 @@ static void dump_exception_info(u32_t vector, u32_t cause, u32_t parameter)
  * invokes the user provided routine k_sys_fatal_error_handler() which is
  * responsible for implementing the error handling policy.
  */
-void _Fault(z_arch_esf_t *esf, u32_t old_sp)
+void _Fault(z_arch_esf_t *esf, uint32_t old_sp)
 {
-	u32_t vector, cause, parameter;
-	u32_t exc_addr = z_arc_v2_aux_reg_read(_ARC_V2_EFA);
-	u32_t ecr = z_arc_v2_aux_reg_read(_ARC_V2_ECR);
+	uint32_t vector, cause, parameter;
+	uint32_t exc_addr = z_arc_v2_aux_reg_read(_ARC_V2_EFA);
+	uint32_t ecr = z_arc_v2_aux_reg_read(_ARC_V2_ECR);
 
 #ifdef CONFIG_USERSPACE
 	for (int i = 0; i < ARRAY_SIZE(exceptions); i++) {
-		u32_t start = (u32_t)exceptions[i].start;
-		u32_t end = (u32_t)exceptions[i].end;
+		uint32_t start = (uint32_t)exceptions[i].start;
+		uint32_t end = (uint32_t)exceptions[i].end;
 
 		if (esf->pc >= start && esf->pc < end) {
-			esf->pc = (u32_t)(exceptions[i].fixup);
+			esf->pc = (uint32_t)(exceptions[i].fixup);
 			return;
 		}
 	}
@@ -401,9 +380,9 @@ void _Fault(z_arch_esf_t *esf, u32_t old_sp)
 		return;
 	}
 
-	z_fatal_print("***** Exception vector: 0x%x, cause code: 0x%x, parameter 0x%x",
-	       vector, cause, parameter);
-	z_fatal_print("Address 0x%x", exc_addr);
+	LOG_ERR("***** Exception vector: 0x%x, cause code: 0x%x, parameter 0x%x",
+		vector, cause, parameter);
+	LOG_ERR("Address 0x%x", exc_addr);
 #ifdef CONFIG_ARC_EXCEPTION_DEBUG
 	dump_exception_info(vector, cause, parameter);
 #endif

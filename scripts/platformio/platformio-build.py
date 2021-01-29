@@ -1,10 +1,15 @@
+
 import json
 import os
+import subprocess
 import sys
 
-from SCons.Script import DefaultEnvironment
+import click
 
-from platformio import util
+from SCons.Script import ARGUMENTS, COMMAND_LINE_TARGETS
+
+from platformio import fs
+from platformio.compat import WINDOWS
 from platformio.proc import exec_command
 from platformio.util import get_systype
 
@@ -15,32 +20,44 @@ try:
     import yaml
     import pykwalify
 except ImportError:
+    deps = ["pyyaml", "pykwalify", "six"]
+    if WINDOWS:
+        deps.append("windows-curses")
     env.Execute(
         env.VerboseAction(
-            "$PYTHONEXE -m pip install pyyaml pykwalify",
+            "$PYTHONEXE -m pip install %s" % " ".join(deps),
             "Installing Zephyr's Python dependencies",
         )
     )
 
+    import yaml
+
+
 platform = env.PioPlatform()
 board = env.BoardConfig()
 
-FRAMEWORK_DIR = platform.get_package_dir("framework-N03")
+FRAMEWORK_DIR = platform.get_package_dir("framework-zephyr")
+FRAMEWORK_VERSION = platform.get_package_version("framework-zephyr")
 assert os.path.isdir(FRAMEWORK_DIR)
 
 BUILD_DIR = env.subst("$BUILD_DIR")
+PROJECT_DIR = env.subst("$PROJECT_DIR")
+PROJECT_SRC_DIR = env.subst("$PROJECT_SRC_DIR")
 CMAKE_API_DIR = os.path.join(BUILD_DIR, ".cmake", "api", "v1")
 CMAKE_API_QUERY_DIR = os.path.join(CMAKE_API_DIR, "query")
 CMAKE_API_REPLY_DIR = os.path.join(CMAKE_API_DIR, "reply")
 
 PLATFORMS_WITH_EXTERNAL_HAL = {
-    "atmelsam": "atmel",
-    "freescalekinetis": "nxp",
-    "H1": "stm32",
-    "siliconlabsefm32": "silabs",
-    "nordicnrf51": "nordic",
-    "H9": "nordic",
-    "nxplpc": "nxp"
+    "atmelsam": ["st", "atmel"],
+    "chipsalliance": ["swervolf"],
+    "freescalekinetis": ["st", "nxp"],
+    "ststm32": ["st", "stm32"],
+    "siliconlabsefm32": ["st", "silabs"],
+    "nordicnrf51": ["st", "nordic"],
+    "nordicnrf52": ["st", "nordic"],
+    "P09": ["st", "nordic"],
+    "nxplpc": ["st", "nxp"],
+    "nxpimxrt": ["st", "nxp"],
 }
 
 
@@ -89,16 +106,11 @@ def populate_zephyr_env_vars(zephyr_env, board_config):
     if "windows" not in get_systype():
         additional_packages.append(platform.get_package_dir("tool-gperf"))
 
-    zephyr_env["PATH"] = (
-        str(env["ENV"]["PATH"]) + os.pathsep + os.pathsep.join(additional_packages)
-    )
+    zephyr_env["PATH"] = os.pathsep.join(additional_packages)
 
 
 def is_proper_zephyr_project():
-    project_dir = env.subst("$PROJECT_DIR")
-    cmakelist_present = os.path.isfile(os.path.join(
-        project_dir, "zephyr", "CMakeLists.txt"))
-    return cmakelist_present
+    return os.path.isfile(os.path.join(PROJECT_DIR, "zephyr", "CMakeLists.txt"))
 
 
 def create_default_project_files():
@@ -110,24 +122,33 @@ FILE(GLOB app_sources ../src/*.c*)
 target_sources(app PRIVATE ${app_sources})
 """
 
-    project_dir = env.subst("$PROJECT_DIR")
-    cmake_txt_file = os.path.join(project_dir, "zephyr", "CMakeLists.txt")
+    app_tpl = """#include <zephyr.h>
+
+void main(void)
+{
+}
+"""
+
+    cmake_txt_file = os.path.join(PROJECT_DIR, "zephyr", "CMakeLists.txt")
     if not os.path.isfile(cmake_txt_file):
         os.makedirs(os.path.dirname(cmake_txt_file))
         with open(cmake_txt_file, "w") as fp:
-            fp.write(cmake_tpl % os.path.basename(project_dir))
+            fp.write(cmake_tpl % os.path.basename(PROJECT_DIR))
 
-    if not os.listdir(os.path.join(env.subst("$PROJECT_SRC_DIR"))):
+    if not os.listdir(os.path.join(PROJECT_SRC_DIR)):
         # create an empty file to make CMake happy during first init
-        open(os.path.join(env.subst("$PROJECT_SRC_DIR"), "empty.c"), "a").close()
+        with open(os.path.join(PROJECT_SRC_DIR, "main.c"), "w") as fp:
+            fp.write(app_tpl)
 
 
 def is_cmake_reconfigure_required():
     cmake_cache_file = os.path.join(BUILD_DIR, "CMakeCache.txt")
-    cmake_txt_file = os.path.join(env.subst("$PROJECT_DIR"), "zephyr", "CMakeLists.txt")
+    cmake_txt_file = os.path.join(PROJECT_DIR, "zephyr", "CMakeLists.txt")
     cmake_preconf_dir = os.path.join(BUILD_DIR, "zephyr", "include", "generated")
+    cmake_preconf_misc = os.path.join(BUILD_DIR, "zephyr", "misc", "generated")
+    zephyr_prj_conf = os.path.join(PROJECT_DIR, "zephyr", "prj.conf")
 
-    for d in (CMAKE_API_REPLY_DIR, cmake_preconf_dir):
+    for d in (CMAKE_API_REPLY_DIR, cmake_preconf_dir, cmake_preconf_misc):
         if not os.path.isdir(d) or not os.listdir(d):
             return True
     if not os.path.isfile(cmake_cache_file):
@@ -136,8 +157,29 @@ def is_cmake_reconfigure_required():
         return True
     if os.path.getmtime(cmake_txt_file) > os.path.getmtime(cmake_cache_file):
         return True
+    if os.path.isfile(zephyr_prj_conf) and os.path.getmtime(
+        zephyr_prj_conf
+    ) > os.path.getmtime(cmake_cache_file):
+        return True
 
     return False
+
+
+def get_zephyr_modules():
+    west_config = os.path.join(FRAMEWORK_DIR, "west.yml")
+    if not os.path.isfile(west_config):
+        sys.stderr.write("Error: Couldn't find 'west.yml'\n")
+        env.Exit(1)
+
+    with open(west_config) as fp:
+        config = list(yaml.load_all(fp, Loader=yaml.FullLoader))[0]
+        return [
+            m
+            for m in config["manifest"]["projects"]
+            if not m["path"].startswith(
+                ("tools", "modules/bsim_hw_models", "modules/hal")
+            )
+        ]
 
 
 def run_cmake():
@@ -146,26 +188,52 @@ def run_cmake():
     cmake_cmd = [
         os.path.join(platform.get_package_dir("tool-cmake") or "", "bin", "cmake"),
         "-S",
-        os.path.join(env.subst("$PROJECT_DIR"), "zephyr"),
+        os.path.join(PROJECT_DIR, "zephyr"),
         "-B",
         BUILD_DIR,
         "-G",
         "Ninja",
         "-DBOARD=%s" % get_zephyr_target(board),
         "-DPYTHON_EXECUTABLE:FILEPATH=%s" % env.subst("$PYTHONEXE"),
+        "-DPYTHON_PREFER:FILEPATH=%s" % env.subst("$PYTHONEXE"),
+        "-DPIO_PACKAGES_DIR:PATH=%s" % env.subst("$PROJECT_PACKAGES_DIR"),
     ]
 
-    platform_name = env.subst("$PIOPLATFORM")
-    if platform_name in PLATFORMS_WITH_EXTERNAL_HAL.keys():
+    if board.get("build.zephyr.cmake_extra_args", ""):
         cmake_cmd.extend(
+            click.parser.split_arg_string(board.get("build.zephyr.cmake_extra_args"))
+        )
+
+    zephyr_modules = []
+    for m in get_zephyr_modules():
+        module_name = "framework-zephyr-" + m["name"].replace("_", "-")
+        try:
+            module_path = platform.get_package_dir(module_name)
+        except KeyError:
+            print("Warning! Missing Zephyr module " + module_name)
+            continue
+        zephyr_modules.append(module_path)
+
+    platform_name = env.subst("$PIOPLATFORM")
+    if platform_name in PLATFORMS_WITH_EXTERNAL_HAL:
+        zephyr_modules.extend(
             [
-                "-D",
-                "ZEPHYR_MODULES="
-                + platform.get_package_dir(
-                    "framework-zephyr-hal-" + PLATFORMS_WITH_EXTERNAL_HAL[platform_name]),
+                platform.get_package_dir("framework-zephyr-hal-" + m)
+                for m in PLATFORMS_WITH_EXTERNAL_HAL[platform_name]
             ]
         )
 
+    if get_board_architecture(board) == "arm":
+        zephyr_modules.append(platform.get_package_dir("framework-zephyr-cmsis"))
+
+    if zephyr_modules:
+        zephyr_modules = [
+            _fix_package_path(m) if "@" in os.path.basename(m) else m
+            for m in zephyr_modules
+        ]
+        cmake_cmd.extend(["-D", "ZEPHYR_MODULES=" + ";".join(zephyr_modules)])
+
+    # Run Zephyr in an isolated environment with specific env vars
     zephyr_env = os.environ.copy()
     populate_zephyr_env_vars(zephyr_env, board)
 
@@ -181,21 +249,20 @@ def run_cmake():
 
 
 def get_cmake_code_model():
-    query_file = os.path.join(CMAKE_API_QUERY_DIR, "codemodel-v2")
-    if not os.path.isfile(query_file):
-        os.makedirs(os.path.dirname(query_file))
-        open(query_file, "a").close()  # create an empty file
-
     if not is_proper_zephyr_project():
         create_default_project_files()
 
     if is_cmake_reconfigure_required():
+        # Explicitly clean build folder to avoid cached values
+        if os.path.isdir(CMAKE_API_DIR):
+            fs.rmtree(BUILD_DIR)
+        query_file = os.path.join(CMAKE_API_QUERY_DIR, "codemodel-v2")
+        if not os.path.isfile(query_file):
+            os.makedirs(os.path.dirname(query_file))
+            open(query_file, "a").close()  # create an empty file
         run_cmake()
 
-    if (
-        not os.path.isdir(CMAKE_API_REPLY_DIR)
-        or not os.listdir(CMAKE_API_REPLY_DIR)
-    ):
+    if not os.path.isdir(CMAKE_API_REPLY_DIR) or not os.listdir(CMAKE_API_REPLY_DIR):
         sys.stderr.write("Error: Couldn't find CMake API response file\n")
         env.Exit(1)
 
@@ -231,13 +298,18 @@ def get_target_elf_arch(board_config):
     env.Exit(1)
 
 
-def build_library(lib_config):
-    lib_objects = compile_source_files(lib_config)
-    lib_name = lib_config["name"]
-    if lib_name.startswith("..__"):
-        lib_name = lib_name.replace("..__", "")
+def build_library(default_env, lib_config, project_src_dir, prepend_dir=None):
+    lib_name = lib_config.get("nameOnDisk", lib_config["name"])
+    lib_path = lib_config["paths"]["build"]
+    if prepend_dir:
+        lib_path = os.path.join(prepend_dir, lib_path)
+    lib_objects = compile_source_files(
+        lib_config, default_env, project_src_dir, prepend_dir
+    )
 
-    return env.Library(target=os.path.join("$BUILD_DIR", lib_name), source=lib_objects)
+    return default_env.Library(
+        target=os.path.join("$BUILD_DIR", lib_path, lib_name), source=lib_objects
+    )
 
 
 def get_target_config(project_configs, target_index):
@@ -251,173 +323,154 @@ def get_target_config(project_configs, target_index):
         return json.load(fp)
 
 
-def generate_kobject_files():
+def _fix_package_path(module_path):
+    # Possible package names in 'package@version' format is not compatible with CMake
+    module_name = os.path.basename(module_path)
+    if "@" in module_name:
+        new_path = os.path.join(
+            os.path.dirname(module_path), module_name.replace("@", "-"),
+        )
+        os.rename(module_path, new_path)
+        module_path = new_path
+
+    assert module_path and os.path.isdir(module_path)
+    return module_path
+
+
+def generate_includible_file(source_file):
     cmd = [
         "$PYTHONEXE",
-        '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "gen_kobject_list.py"),
-        "--kobj-types-output",
-        "${TARGETS[0]}",
-        "--kobj-otype-output",
-        "${TARGETS[1]}",
-        "--kobj-size-output",
-        "${TARGETS[2]}",
-    ]
-
-    return env.Command(
-        [
-            os.path.join(
-                "$BUILD_DIR", "zephyr", "include", "generated", "kobj-types-enum.h"
-            ),
-            os.path.join(
-                "$BUILD_DIR", "zephyr", "include", "generated", "otype-to-str.h"
-            ),
-            os.path.join(
-                "$BUILD_DIR", "zephyr", "include", "generated", "otype-to-size.h"
-            ),
-        ],
-        None,
-        env.VerboseAction(" ".join(cmd), "Generating KObject files $TARGETS"),
-    )
-
-
-def validate_driver_cmd():
-
-    cmd = [
-        "$PYTHONEXE",
-        '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "gen_kobject_list.py"),
-        "--validation-output",
-        "$TARGET",
-    ]
-
-    return env.Command(
-        os.path.join(
-            "$BUILD_DIR", "zephyr", "include", "generated", "driver-validation.h"
-        ),
-        None,
-        env.VerboseAction(" ".join(cmd), "Validating drivers $TARGET"),
-    )
-
-
-def generate_syscall_macro_header():
-    cmd = [
-        "$PYTHONEXE",
-        '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "gen_syscall_header.py"),
+        '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "file2hex.py"),
+        "--file",
+        "$SOURCE",
         ">",
         "$TARGET",
     ]
 
     return env.Command(
         os.path.join(
-            "$BUILD_DIR", "zephyr", "include", "generated", "syscall_macros.h"
+            "$BUILD_DIR", "zephyr", "include", "generated", "${SOURCE.file}.inc"
         ),
-        None,
-        env.VerboseAction(" ".join(cmd), "Generating syscall macro header $TARGET"),
+        env.File(source_file),
+        env.VerboseAction(" ".join(cmd), "Generating file $TARGET"),
     )
+
+
+def generate_kobject_files():
+    kobj_files = (
+        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", f)
+        for f in ("kobj-types-enum.h", "otype-to-str.h", "otype-to-size.h")
+    )
+
+    if all(os.path.isfile(env.subst(f)) for f in kobj_files):
+        return
+
+    cmd = (
+        "$PYTHONEXE",
+        '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "gen_kobject_list.py"),
+        "--kobj-types-output",
+        os.path.join(
+            "$BUILD_DIR", "zephyr", "include", "generated", "kobj-types-enum.h"
+        ),
+        "--kobj-otype-output",
+        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "otype-to-str.h"),
+        "--kobj-size-output",
+        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "otype-to-size.h"),
+        "--include",
+        os.path.join("$BUILD_DIR", "zephyr", "misc", "generated", "struct_tags.json"),
+    )
+
+    env.Execute(env.VerboseAction(" ".join(cmd), "Generating KObject files..."))
+
+
+def validate_driver():
+
+    driver_header = os.path.join(
+        "$BUILD_DIR", "zephyr", "include", "generated", "driver-validation.h"
+    )
+
+    if os.path.isfile(env.subst(driver_header)):
+        return
+
+    cmd = (
+        "$PYTHONEXE",
+        '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "gen_kobject_list.py"),
+        "--validation-output",
+        driver_header,
+        "--include",
+        os.path.join("$BUILD_DIR", "zephyr", "misc", "generated", "struct_tags.json"),
+    )
+
+    env.Execute(env.VerboseAction(" ".join(cmd), "Validating driver..."))
 
 
 def parse_syscalls():
-    cmd = [
-        "$PYTHONEXE",
-        '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "parse_syscalls.py"),
-        "--include",
-        '"%s"' % os.path.join(FRAMEWORK_DIR, "include"),
-        "--json-file",
-        "$TARGET",
-    ]
-
-    return env.Command(
-        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "syscalls.json"),
-        None,
-        env.VerboseAction(" ".join(cmd), "Parsing system calls from $TARGET"),
+    syscalls_config = os.path.join(
+        "$BUILD_DIR", "zephyr", "misc", "generated", "syscalls.json"
     )
 
+    struct_tags = os.path.join(
+        "$BUILD_DIR", "zephyr", "misc", "generated", "struct_tags.json"
+    )
 
-def generate_syscall_files(syscalls_json):
+    if not all(os.path.isfile(env.subst(f)) for f in (syscalls_config, struct_tags)):
+        cmd = [
+            "$PYTHONEXE",
+            '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "parse_syscalls.py"),
+            "--include",
+            '"%s"' % os.path.join(FRAMEWORK_DIR, "include"),
+            "--include",
+            '"%s"' % os.path.join(FRAMEWORK_DIR, "drivers"),
+            "--include",
+            '"%s"' % os.path.join(FRAMEWORK_DIR, "subsys", "net"),
+        ]
+
+        # Temporarily until CMake exports actual custom commands
+        if board.get("build.zephyr.syscall_include_dirs", ""):
+            incs = [
+                inc if os.path.isabs(inc) else os.path.join(PROJECT_DIR, inc)
+                for inc in board.get("build.zephyr.syscall_include_dirs").split()
+            ]
+
+            cmd.extend(['--include "%s"' % inc for inc in incs])
+
+        cmd.extend(("--json-file", syscalls_config, "--tag-struct-file", struct_tags))
+
+        env.Execute(env.VerboseAction(" ".join(cmd), "Parsing system calls..."))
+
+    return syscalls_config
+
+
+def generate_syscall_files(syscalls_json, project_settings):
+    syscalls_header = os.path.join(
+        BUILD_DIR, "zephyr", "include", "generated", "syscall_list.h"
+    )
+
+    if os.path.isfile(syscalls_header):
+        return
+
     cmd = [
         "$PYTHONEXE",
         '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "gen_syscalls.py"),
         "--json-file",
-        "$SOURCE",
+        syscalls_json,
         "--base-output",
         os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "syscalls"),
         "--syscall-dispatch",
-        "${TARGETS[0]}",
+        os.path.join(
+            "$BUILD_DIR", "zephyr", "include", "generated", "syscall_dispatch.c"
+        ),
         "--syscall-list",
-        "${TARGETS[1]}",
+        syscalls_header,
     ]
 
-    return env.Command(
-        [
-            os.path.join(
-                BUILD_DIR, "zephyr", "include", "generated", "syscall_dispatch.c"
-            ),
-            os.path.join(BUILD_DIR, "zephyr", "include", "generated", "syscall_list.h"),
-            os.path.join(
-                "$BUILD_DIR",
-                "zephyr",
-                "include",
-                "generated",
-                "syscalls",
-                "errno_private.h",
-            ),
-            os.path.join(
-                "$BUILD_DIR", "zephyr", "include", "generated", "syscalls", "atomic.h"
-            ),
-            os.path.join(
-                "$BUILD_DIR", "zephyr", "include", "generated", "syscalls", "device.h"
-            ),
-            os.path.join(
-                "$BUILD_DIR", "zephyr", "include", "generated", "syscalls", "kernel.h"
-            ),
-            os.path.join(
-                "$BUILD_DIR",
-                "zephyr",
-                "include",
-                "generated",
-                "syscalls",
-                "sys_clock.h",
-            ),
-        ],
-        syscalls_json,
-        env.VerboseAction(" ".join(cmd), "Generating syscall files"),
-    )
+    if project_settings.get("CONFIG_TIMEOUT_64BIT", False) == "1":
+        cmd.extend(("--split-type", "k_timeout_t"))
+
+    env.Execute(env.VerboseAction(" ".join(cmd), "Generating syscall files"))
 
 
-def extract_link_flags(target_config):
-    def _split_flags(flags_str):
-        i = 0
-        result = []
-        flag = []
-        while i < len(flags_str.strip()):
-            if flags_str[i] == " " and flags_str[i + 1] == "-":
-                result.append("".join(flag).strip())
-                flag.clear()
-            flag.append(flags_str[i])
-            i += 1
-
-        return result
-
-    link_flags = []
-    for f in (
-        target_config.get("link", {})
-        .get("commandFragments", [])[0]
-        .get("fragment")
-        .split()
-    ):
-        if f.endswith((".a", ".o", ".obj")) or f.startswith(
-            ("-Wl,--no-whole-archive", "-Wl,--whole-archive")
-        ):
-            continue
-
-        # With -Wl,-T GCC is not able to pick ld script that's not in CWD
-        if f == "-Wl,-T":
-            f = "-T"
-        link_flags.append(f)
-
-    return link_flags
-
-
-def get_linkerscript_final_cmd(app_includes, base_ld_script):
+def get_linkerscript_final_cmd(app_config, base_ld_script):
     cmd = [
         "$CC",
         "-x",
@@ -430,6 +483,8 @@ def get_linkerscript_final_cmd(app_includes, base_ld_script):
         "$TARGET",
         "-D__GCC_LINKER_CMD__",
         "-DLINKER_PASS2",
+        "-D_LINKER",
+        "-D_ASMLANGUAGE",
         "-E",
         "$SOURCE",
         "-P",
@@ -437,7 +492,8 @@ def get_linkerscript_final_cmd(app_includes, base_ld_script):
         "$TARGET",
     ]
 
-    cmd.extend(['-I"%s"' % inc for inc in app_includes])
+    includes = extract_includes_from_compile_group(app_config["compileGroups"][0])
+    cmd.extend(['-I"%s"' % inc for inc in includes["plain_includes"]])
 
     return env.Command(
         os.path.join("$BUILD_DIR", "zephyr", "linker_pass_final.cmd"),
@@ -446,9 +502,10 @@ def get_linkerscript_final_cmd(app_includes, base_ld_script):
     )
 
 
-def find_base_ldscript(app_includes):
-    # A temporary solution since there is no an easy way to find linker script
-    for inc in app_includes:
+def find_base_ldscript(app_config):
+    includes = extract_includes_from_compile_group(app_config["compileGroups"][0])
+    # A temporary solution since there is no easy way to find linker script
+    for inc in includes["plain_includes"]:
         for f in os.listdir(inc):
             if f == "linker.ld" and os.path.isfile(os.path.join(inc, f)):
                 return os.path.join(inc, f)
@@ -457,7 +514,7 @@ def find_base_ldscript(app_includes):
     env.Exit(1)
 
 
-def get_linkerscript_cmd(app_includes, base_ld_script):
+def get_linkerscript_cmd(app_config, base_ld_script):
     cmd = [
         "$CC",
         "-x",
@@ -469,6 +526,8 @@ def get_linkerscript_cmd(app_includes, base_ld_script):
         "-MT",
         "$TARGET",
         "-D__GCC_LINKER_CMD__",
+        "-D_LINKER",
+        "-D_ASMLANGUAGE",
         "-E",
         "$SOURCE",
         "-P",
@@ -476,7 +535,8 @@ def get_linkerscript_cmd(app_includes, base_ld_script):
         "$TARGET",
     ]
 
-    cmd.extend(['-I"%s"' % inc for inc in app_includes])
+    includes = extract_includes_from_compile_group(app_config["compileGroups"][0])
+    cmd.extend(['-I"%s"' % inc for inc in includes["plain_includes"]])
 
     return env.Command(
         os.path.join("$BUILD_DIR", "zephyr", "linker.cmd"),
@@ -496,53 +556,68 @@ def load_target_configurations(cmake_codemodel):
     return configs
 
 
-def prepare_build_envs(config):
+def extract_defines_from_compile_group(compile_group):
+    result = []
+    result.extend(
+        [
+            d.get("define").replace('"', '\\"').strip()
+            for d in compile_group.get("defines", [])
+        ]
+    )
+
+    for f in compile_group.get("compileCommandFragments", []):
+        result.extend(env.ParseFlags(f.get("fragment", "")).get("CPPDEFINES", []))
+    return result
+
+
+def prepare_build_envs(config, default_env):
     build_envs = []
-    target_compile_groups = config.get("compileGroups")
+    target_compile_groups = config.get("compileGroups", [])
     is_build_type_debug = (
         set(["debug", "sizedata"]) & set(COMMAND_LINE_TARGETS)
-        or env.GetProjectOption("build_type") == "debug"
+        or default_env.GetProjectOption("build_type") == "debug"
     )
 
     for cg in target_compile_groups:
-        includes = []
-        sys_includes = []
-        for inc in cg.get("includes", []):
-            inc_path = inc["path"]
-            if inc.get("isSystem", False):
-                sys_includes.append(inc_path)
-            else:
-                includes.append(inc_path)
-
-        defines = [inc.get("define") for inc in cg.get("defines", [])]
+        includes = extract_includes_from_compile_group(cg, path_prefix=FRAMEWORK_DIR)
+        defines = extract_defines_from_compile_group(cg)
+        build_env = default_env.Clone()
         compile_commands = cg.get("compileCommandFragments", [])
-        for cc in compile_commands:
-            build_env = env.Clone()
-            build_flags = cc.get("fragment")
-            build_env.AppendUnique(**build_env.ParseFlags(build_flags))
+
+        i = 0
+        length = len(compile_commands)
+        while i < length:
+            build_flags = compile_commands[i].get("fragment", "")
+            if build_flags.strip() in ("-imacros", "-include"):
+                i += 1
+                file_path = compile_commands[i].get("fragment", "")
+                build_env.Append(CCFLAGS=[build_flags + file_path])
+            elif build_flags.strip() and not build_flags.startswith("-D"):
+                build_env.AppendUnique(**build_env.ParseFlags(build_flags))
+            i += 1
+        build_env.AppendUnique(CPPDEFINES=defines, CPPPATH=includes["plain_includes"])
+        if includes["prefixed_includes"]:
+            build_env.Append(CCFLAGS=["-iprefix", fs.to_unix_path(FRAMEWORK_DIR)])
             build_env.Append(
-                CPPDEFINES=defines,
-                CPPPATH=includes,
+                CCFLAGS=[
+                    "-iwithprefixbefore/" + inc for inc in includes["prefixed_includes"]
+                ]
             )
-
-            if sys_includes:
-                build_env.Append(CCFLAGS=[("-isystem", inc) for inc in sys_includes])
-
-            build_env.Append(ASFLAGS=build_env.get("CCFLAGS", [])[:])
-
-            build_env.ProcessUnFlags(env.get("BUILD_UNFLAGS"))
-            if is_build_type_debug:
-                build_env.ConfigureDebugFlags()
-            build_envs.append(build_env)
+        if includes["sys_includes"]:
+            build_env.Append(
+                CCFLAGS=["-isystem" + inc for inc in includes["sys_includes"]]
+            )
+        build_env.Append(ASFLAGS=build_env.get("CCFLAGS", [])[:])
+        build_env.ProcessUnFlags(default_env.get("BUILD_UNFLAGS"))
+        if is_build_type_debug:
+            build_env.ConfigureDebugFlags()
+        build_envs.append(build_env)
 
     return build_envs
 
 
-def compile_source_files(config):
-    build_envs = prepare_build_envs(config)
-    config_name = config["name"]
-    if config_name.startswith("..__"):
-        config_name = config_name.replace("..__", "")
+def compile_source_files(config, default_env, project_src_dir, prepend_dir=None):
+    build_envs = prepare_build_envs(config, default_env)
     objects = []
     for source in config.get("sources", []):
         if source["path"].endswith(".rule"):
@@ -550,17 +625,26 @@ def compile_source_files(config):
         compile_group_idx = source.get("compileGroupIndex")
         if compile_group_idx is not None:
             src_path = source.get("path")
-            if not os.path.isabs(source.get("path")):
+            if not os.path.isabs(src_path):
                 # For cases when sources are located near CMakeLists.txt
-                src_path = os.path.join(env.subst("$PROJECT_DIR"), "zephyr", src_path)
+                src_path = os.path.join(PROJECT_DIR, "zephyr", src_path)
+            local_path = config["paths"]["source"]
+            if not os.path.isabs(local_path):
+                local_path = os.path.join(project_src_dir, config["paths"]["source"])
+            obj_path_temp = os.path.join(
+                "$BUILD_DIR",
+                prepend_dir or config["name"].replace("framework-zephyr", ""),
+                config["paths"]["build"],
+            )
+            if src_path.startswith(local_path):
+                obj_path = os.path.join(
+                    obj_path_temp, os.path.relpath(src_path, local_path)
+                )
+            else:
+                obj_path = os.path.join(obj_path_temp, os.path.basename(src_path))
             objects.append(
                 build_envs[compile_group_idx].StaticObject(
-                    target=os.path.join(
-                        "$BUILD_DIR",
-                        config_name,
-                        os.path.basename(os.path.dirname(src_path)),
-                        os.path.basename(src_path) + ".o",
-                    ),
+                    target=os.path.join(obj_path + ".o"),
                     source=os.path.realpath(src_path),
                 )
             )
@@ -569,73 +653,98 @@ def compile_source_files(config):
 
 
 def get_app_includes(app_config):
-    plain_includes = []
+    includes = extract_includes_from_compile_group(
+        app_config["compileGroups"][0], FRAMEWORK_DIR)
+    # Add path with pregenerated headers
+    includes["plain_includes"].append(
+        os.path.join(BUILD_DIR, "zephyr", "include", "generated")
+    )
+
+    return includes
+
+
+def extract_includes_from_compile_group(compile_group, path_prefix=None):
+    def _normalize_prefix(prefix):
+        prefix = fs.to_unix_path(prefix)
+        if not prefix.endswith("/"):
+            prefix = prefix + "/"
+        return prefix
+
+    if path_prefix:
+        path_prefix = _normalize_prefix(path_prefix)
+
+    includes = []
     sys_includes = []
-    cg = app_config["compileGroups"][0]
-    for inc in cg.get("includes", []):
-        inc_path = inc["path"]
+    prefixed_includes = []
+    for inc in compile_group.get("includes", []):
+        inc_path = fs.to_unix_path(inc["path"])
         if inc.get("isSystem", False):
             sys_includes.append(inc_path)
+        elif path_prefix and inc_path.startswith(path_prefix):
+            prefixed_includes.append(
+                fs.to_unix_path(os.path.relpath(inc_path, path_prefix))
+            )
         else:
-            plain_includes.append(inc_path)
-
-    plain_includes.append(os.path.join(
-        env.subst("$BUILD_DIR"), "zephyr", "include", "generated"))
+            includes.append(inc_path)
 
     return {
-        "plain_includes": plain_includes,
-        "sys_includes": sys_includes
+        "plain_includes": includes,
+        "sys_includes": sys_includes,
+        "prefixed_includes": prefixed_includes,
     }
 
 
 def get_app_defines(app_config):
-    return [
-        inc.get("define") for inc in app_config["compileGroups"][0].get("defines", [])
-    ]
+    return extract_defines_from_compile_group(app_config["compileGroups"][0])
 
 
-def get_firmware_flags(app_config, main_config):
-    # Use the first compile commands group
-    result = {}
-    app_flags = {}
-    for cg in app_config["compileGroups"]:
-        app_flags[cg["language"]] = env.ParseFlags(
-            cg["compileCommandFragments"][0]["fragment"])
+def get_app_flags(app_config, default_env):
+    app_env = prepare_build_envs(app_config, default_env)[0]
+    return {
+        "ASFLAGS": app_env.get("ASFLAGS", []),
+        "CFLAGS": app_env.get("CFLAGS", []),
+        "CCFLAGS": app_env.get("CCFLAGS", []),
+        "CXXFLAGS": app_env.get("CXXFLAGS", []),
+    }
 
-    if "C" in app_flags.keys():
-        result.update(app_flags["C"])
-    if "CXX" in app_flags.keys():
-        cxx_section = app_flags["CXX"]
-        if not result.get("CCFLAGS", []):
-            result.update(cxx_section)
-        else:
-            # Flags that are not present in CC and CXX sections
-            cflags = set(result["CCFLAGS"]) - set(cxx_section["CCFLAGS"])
-            # Flags that are not present in C and CC sections
-            cxx_flags = set(cxx_section["CCFLAGS"]) - set(result["CCFLAGS"])
-            # Common flags for both C and CXX sections
-            ccflags = set(result["CCFLAGS"]) - cxx_flags - cflags
-            result["CFLAGS"].extend(list(cflags))
-            result["CXXFLAGS"] = list(cxx_flags) + cxx_section["CXXFLAGS"]
-            result["CCFLAGS"] = list(ccflags)
-    if "ASM" in app_flags.keys():
-        result["ASFLAGS"] = list(app_flags["CCFLAGS"])
 
-    if not result:
-        sys.stderr.write("Error: No build flags found for app target\n")
-        env.Exit(1)
+def extract_link_args(target_config):
+    link_args = {"LINKFLAGS": [], "LIBS": [], "LIBPATH": [], "__LIB_DEPS": []}
 
-    standard_libs = ("-lgcc", "-lc", "-lm")
-    app_link_flags = extract_link_flags(main_config)
+    for f in target_config.get("link", {}).get("commandFragments", []):
+        fragment = f.get("fragment", "").strip()
+        fragment_role = f.get("role", "").strip()
+        if not fragment or not fragment_role:
+            continue
+        args = click.parser.split_arg_string(fragment)
+        if fragment_role == "flags":
+            link_args["LINKFLAGS"].extend(args)
+        elif fragment_role == "libraries":
+            if fragment.startswith("-l"):
+                link_args["LIBS"].extend(args)
+            elif fragment.startswith("-L"):
+                lib_path = fragment.replace("-L", "").strip()
+                if lib_path not in link_args["LIBPATH"]:
+                    link_args["LIBPATH"].append(lib_path.replace('"', ""))
+            elif fragment.startswith("-") and not fragment.startswith("-l"):
+                # CMake mistakenly marks LINKFLAGS as libraries
+                link_args["LINKFLAGS"].extend(args)
+            elif os.path.isfile(fragment) and os.path.isabs(fragment):
+                # In case of precompiled archives from framework package
+                lib_path = os.path.dirname(fragment)
+                if lib_path not in link_args["LIBPATH"]:
+                    link_args["LIBPATH"].append(os.path.dirname(fragment))
+                link_args["LIBS"].extend(
+                    [os.path.basename(l) for l in args if l.endswith(".a")]
+                )
+            elif fragment.endswith(".a"):
+                link_args["__LIB_DEPS"].extend(
+                    [os.path.basename(l) for l in args if l.endswith(".a")]
+                )
+            else:
+                link_args["LINKFLAGS"].extend(args)
 
-    # Ignore ld script and standard libraries as they'll be specified in a special place
-    result["LINKFLAGS"] = [
-        f
-        for f in app_link_flags
-        if not f.endswith(".cmd") and f != "-T" and f not in standard_libs
-    ]
-
-    return result
+    return link_args
 
 
 def generate_isr_list_binary(preliminary_elf, board):
@@ -665,10 +774,9 @@ def generate_isr_table_file_cmd(preliminary_elf, board_config):
         "${SOURCES[0]}",
         "--intlist",
         "${SOURCES[1]}",
-        "--debug",
     ]
 
-    config_file = os.path.join(env.subst("$BUILD_DIR"), "zephyr", ".config")
+    config_file = os.path.join(BUILD_DIR, "zephyr", ".config")
 
     if os.path.isfile(config_file):
         with open(config_file) as fp:
@@ -701,25 +809,74 @@ def generate_offset_header_file_cmd():
 
     return env.Command(
         os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "offsets.h"),
-        os.path.join("$BUILD_DIR", "offsets", "offsets", "offsets.c.o"),
-        env.VerboseAction(
-            " ".join(cmd), "Generating header file with offsets $TARGET",
+        os.path.join(
+            "$BUILD_DIR",
+            "offsets",
+            "zephyr",
+            "arch",
+            get_board_architecture(board),
+            "core",
+            "offsets",
+            "offsets.c.o",
         ),
+        env.VerboseAction(" ".join(cmd), "Generating header file with offsets $TARGET"),
     )
 
 
-def build_offsets_lib(target_configs):
-    lib = build_library(target_configs["offsets"])
+def filter_args(args, allowed, ignore=None):
+    if not allowed:
+        return []
 
-    env.Depends(
-        lib[0].sources[0],
-        generate_syscall_files(parse_syscalls())
-        + generate_syscall_macro_header()
-        + generate_kobject_files(),
+    ignore = ignore or []
+    result = []
+    i = 0
+    length = len(args)
+    while i < length:
+        if any(args[i].startswith(f) for f in allowed) and not any(
+            args[i].startswith(f) for f in ignore
+        ):
+            result.append(args[i])
+            if i + 1 < length and not args[i + 1].startswith("-"):
+                i += 1
+                result.append(args[i])
+        i += 1
+    return result
+
+
+def load_project_settings():
+    result = {}
+    autoconf = os.path.join(BUILD_DIR, "zephyr", "include", "generated", "autoconf.h")
+    if not os.path.isfile(autoconf):
+        print("Warning! Cannot find autoconf file. Project settings won't be processed")
+        return result
+    with open(autoconf, "r") as fp:
+        for line in fp.readlines():
+            line = line.strip()
+            if line.startswith("#define"):
+                config = line.split(" ", 2)
+                assert len(config) != 2, config
+                result[config[1]] = config[2]
+    return result
+
+
+def RunMenuconfig(target, source, env):
+    zephyr_env = os.environ.copy()
+    populate_zephyr_env_vars(zephyr_env, board)
+
+    rc = subprocess.call(
+        [
+            os.path.join(platform.get_package_dir("tool-cmake"), "bin", "cmake"),
+            "--build",
+            BUILD_DIR,
+            "--target",
+            "menuconfig",
+        ],
+        env=zephyr_env,
     )
 
-    return lib
-
+    if rc != 0:
+        sys.stderr.write("Error: Couldn't execute 'menuconfig' target.\n")
+        env.Exit(1)
 
 #
 # Current build script limitations
@@ -749,26 +906,61 @@ if not app_config or not prebuilt_config:
     sys.stderr.write("Error: Couldn't find main Zephyr target in the code model\n")
     env.Exit(1)
 
+project_settings = load_project_settings()
+
+#
+# Generate prerequisite files
+#
+
 offset_header_file = generate_offset_header_file_cmd()
+
+syscalls_config = parse_syscalls()
+generate_syscall_files(syscalls_config, project_settings)
+generate_kobject_files()
+validate_driver()
 
 #
 # LD scripts processing
 #
 
 app_includes = get_app_includes(app_config)
-base_ld_script = find_base_ldscript(app_includes["plain_includes"])
-final_ld_script = get_linkerscript_final_cmd(
-    app_includes["plain_includes"], base_ld_script)
-preliminary_ld_script = get_linkerscript_cmd(app_includes["plain_includes"], base_ld_script)
+base_ld_script = find_base_ldscript(app_config)
+final_ld_script = get_linkerscript_final_cmd(app_config, base_ld_script)
+preliminary_ld_script = get_linkerscript_cmd(app_config, base_ld_script)
 
 env.Depends(final_ld_script, offset_header_file)
 env.Depends(preliminary_ld_script, offset_header_file)
 
 #
+# Includible files processing
+#
+
+if (
+    "generate_inc_file_for_target"
+    in app_config.get("backtraceGraph", {}).get("commands", [])
+    and "build.embed_files" not in board
+):
+    print(
+        "Warning! Detected a custom CMake command for embedding files. Please use "
+        "'board_build.embed_files' option in 'platformio.ini' to include files!"
+    )
+
+if "build.embed_files" in board:
+    for f in board.get("build.embed_files", "").split():
+        file = os.path.join(PROJECT_DIR, f)
+        if not os.path.isfile(env.subst(f)):
+            print('Warning! Could not find file "%s"' % os.path.basename(f))
+            continue
+
+        env.Depends(offset_header_file, generate_includible_file(file))
+
+#
 # Libraries processing
 #
 
-framework_libs_map = {}
+env.Append(CPPDEFINES=[("BUILD_VERSION", "zephyr-v" + FRAMEWORK_VERSION.split(".")[1])])
+
+framework_modules_map = {}
 for target, target_config in target_configs.items():
     lib_name = target_config["name"]
     if target_config["type"] not in (
@@ -777,24 +969,31 @@ for target, target_config in target_configs.items():
     ) or lib_name in ("app", "offsets"):
         continue
 
-    lib = build_library(target_config)
-    framework_libs_map[target_config["id"]] = lib
+    lib = build_library(env, target_config, PROJECT_SRC_DIR)
+    framework_modules_map[target_config["id"]] = lib
 
     if any(
-        d.get("id", "").startswith("offsets_h")
+        d.get("id", "").startswith(("zephyr_generated_headers"))
         for d in target_config.get("dependencies", [])
     ):
         env.Depends(lib[0].sources, offset_header_file)
 
-# Offsets library compiled separately as it requires additional dependencies
-offsets_lib = build_offsets_lib(target_configs)
+# Offsets library compiled separately as it used later for custom dependencies
+offsets_lib = build_library(env, target_configs["offsets"], PROJECT_SRC_DIR)
 
 #
 # Preliminary elf and subsequent targets
 #
 
 preliminary_elf_path = os.path.join("$BUILD_DIR", "firmware-pre.elf")
-env.Depends(preliminary_elf_path, os.path.join(BUILD_DIR, "libkernel.a"))
+
+env.Depends(
+    preliminary_elf_path, os.path.join(BUILD_DIR, "zephyr", "kernel", "libkernel.a")
+)
+env.Depends(
+    preliminary_elf_path,
+    os.path.join(BUILD_DIR, "zephyr", "arch", "common", "libisr_tables.a"),
+)
 
 for dep in (offsets_lib, preliminary_ld_script):
     env.Depends(preliminary_elf_path, dep)
@@ -802,34 +1001,81 @@ for dep in (offsets_lib, preliminary_ld_script):
 isr_table_file = generate_isr_table_file_cmd(preliminary_elf_path, board)
 
 #
-# Final elf target
+# Final firmware targets
 #
 
-env["_EXTRA_ZEPHYR_PIOBUILDFILES"] = compile_source_files(
-    target_configs["zephyr_final"]
+env.Append(
+    PIOBUILDFILES=compile_source_files(prebuilt_config, env, PROJECT_SRC_DIR),
+    _EXTRA_ZEPHYR_PIOBUILDFILES=compile_source_files(
+        target_configs["zephyr_final"], env, PROJECT_SRC_DIR
+    ),
+    __ZEPHYR_OFFSET_HEADER_CMD=offset_header_file
 )
 
 for dep in (isr_table_file, final_ld_script):
     env.Depends("$PROG_PATH", dep)
 
+# Note: `app` is replaced by files from the `src` folder
+# `kernel` and `isr_tables` libs should be placed outside `whole-archive` flags
+ignore_libs = ("kernel", "isr_tables", "app")
+
 libs = [
-    framework_libs_map[d["id"]]
+    framework_modules_map[d["id"]]
     for d in prebuilt_config.get("dependencies", [])
-    if framework_libs_map.get(d["id"], {}) and not d["id"].startswith(("kernel", "app"))
+    if framework_modules_map.get(d["id"], {}) and not d["id"].startswith(ignore_libs)
 ]
 
 env.Replace(ARFLAGS=["qc"])
 env.Prepend(_LIBFLAGS="-Wl,--whole-archive ")
 
-# Note: libc and kernel libraries must be placed explicitly after zephyr libraries
-# outside of whole-archive flag
+project_config = app_config
+project_defines = get_app_defines(project_config)
+project_flags = get_app_flags(project_config, env)
+link_args = extract_link_args(prebuilt_config)
+
+# remove the main linker script flags '-T linker.cmd'
+try:
+    ld_index = link_args["LINKFLAGS"].index("linker.cmd")
+    link_args["LINKFLAGS"].pop(ld_index)
+    link_args["LINKFLAGS"].pop(ld_index - 1)
+except:
+    print("Warning! Couldn't find the main linker script in the CMake code model.")
+
+# Flags shouldn't be merged automatically as they have precise position in linker cmd
+ignore_flags = ("CMakeFiles", "-Wl,--whole-archive", "-Wl,--no-whole-archive")
+
+link_args["LINKFLAGS"] = sorted(
+    filter_args(link_args["LINKFLAGS"], ["-"], ignore_flags)
+)
+
+# Note: isr_tables, kernel and standard libraries must be placed explicitly after
+# zephyr libraries outside of whole-archive flag
+
 env.Append(
     CPPPATH=app_includes["plain_includes"],
-    CPPDEFINES=get_app_defines(app_config),
     CCFLAGS=[("-isystem", inc) for inc in app_includes.get("sys_includes", [])],
-    PIOBUILDFILES=compile_source_files(prebuilt_config),
+    CPPDEFINES=project_defines,
     LIBS=sorted(libs) + [offsets_lib],
-    _LIBFLAGS=" -Wl,--no-whole-archive -lkernel -lc -lm -lgcc",
+    _LIBFLAGS=" -Wl,--no-whole-archive "
+    + " ".join(
+        [
+            os.path.join(BUILD_DIR, "zephyr", "kernel", "libkernel.a"),
+            os.path.join(BUILD_DIR, "zephyr", "arch", "common", "libisr_tables.a"),
+        ]
+        + link_args["LIBS"]
+    ),
+)
+
+# Standard libraries in LIBS are already added to the LINKCOMMAND in _LIBFLAGS
+link_args["LIBS"] = []
+project_flags.update(link_args)
+env.MergeFlags(project_flags)
+
+#
+# Custom builders required
+#
+
+env.Append(
     BUILDERS=dict(
         ElfToBin=Builder(
             action=env.VerboseAction(
@@ -869,10 +1115,8 @@ env.Append(
             ),
             suffix=".hex",
         ),
-    ),
+    )
 )
-
-env.AppendUnique(**get_firmware_flags(app_config, prebuilt_config))
 
 if get_board_architecture(board) == "arm":
     env.Replace(

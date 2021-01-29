@@ -11,10 +11,8 @@
  * Generic Linker script for the riscv platform
  */
 
-#define _LINKER
-#define _ASMLANGUAGE
-
 #include <soc.h>
+#include <devicetree.h>
 
 #include <autoconf.h>
 #include <linker/sections.h>
@@ -36,9 +34,21 @@
 MEMORY
 {
 #ifdef CONFIG_XIP
-    ROM (rx)  : ORIGIN = DT_FLASH_BASE_ADDRESS, LENGTH = KB(DT_FLASH_SIZE)
+#if DT_NODE_HAS_COMPAT_STATUS(DT_CHOSEN(zephyr_flash), soc_nv_flash, okay)
+#define ROM_BASE DT_REG_ADDR(DT_CHOSEN(zephyr_flash))
+#define ROM_SIZE DT_REG_SIZE(DT_CHOSEN(zephyr_flash))
+#elif DT_NODE_HAS_COMPAT_STATUS(DT_CHOSEN(zephyr_flash), jedec_spi_nor, okay)
+/* For jedec,spi-nor we expect the spi controller to memory map the flash
+ * and for that mapping to be the second register property of the spi
+ * controller.
+ */
+#define SPI_CTRL DT_PARENT(DT_CHOSEN(zephyr_flash))
+#define ROM_BASE DT_REG_ADDR_BY_IDX(SPI_CTRL, 1)
+#define ROM_SIZE DT_REG_SIZE_BY_IDX(SPI_CTRL, 1)
 #endif
-    RAM (rwx) : ORIGIN = DT_SRAM_BASE_ADDRESS, LENGTH = KB(DT_SRAM_SIZE)
+    ROM (rx)  : ORIGIN = ROM_BASE, LENGTH = ROM_SIZE
+#endif
+    RAM (rwx) : ORIGIN = CONFIG_SRAM_BASE_ADDRESS, LENGTH = KB(CONFIG_SRAM_SIZE)
     /* Used by and documented in include/linker/intlist.ld */
     IDT_LIST  (wx)      : ORIGIN = 0xFFFFF7FF, LENGTH = 2K
 }
@@ -91,6 +101,7 @@ SECTIONS
 		KEEP(*(".openocd_debug.*"))
 
 		_image_text_start = .;
+
 		*(.text)
 		*(".text.*")
 		*(.gnu.linkonce.t.*)
@@ -114,11 +125,10 @@ SECTIONS
  * zephyr_linker_sources() Cmake function.
  */
 #include <snippets-rodata.ld>
-#ifdef CONFIG_SOC_RODATA_LD
-#include <soc-rodata.ld>
-#endif
 
 	} GROUP_LINK_IN(ROMABLE_REGION)
+
+#include <linker/cplusplus-rom.ld>
 
     _image_rom_end = .;
     __data_rom_start = .;
@@ -143,9 +153,6 @@ SECTIONS
  * zephyr_linker_sources() Cmake function.
  */
 #include <snippets-rwdata.ld>
-#ifdef CONFIG_SOC_RWDATA_LD
-#include <soc-rwdata.ld>
-#endif
 
 	}  GROUP_DATA_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
 
@@ -177,24 +184,9 @@ SECTIONS
 		  __bss_end = ALIGN(4);
 	}  GROUP_DATA_LINK_IN(RAMABLE_REGION, RAMABLE_REGION)
 
-    SECTION_PROLOGUE(_NOINIT_SECTION_NAME,(NOLOAD),)
-	{
-		/*
-		 * This section is used for non-initialized objects that
-		 * will not be cleared during the boot process.
-		 */
-		 *(.noinit)
-		 *(".noinit.*")
+#include <linker/common-noinit.ld>
 
-/* Located in generated directory. This file is populated by the
- * zephyr_linker_sources() Cmake function.
- */
-#include <snippets-noinit.ld>
-#ifdef CONFIG_SOC_NOINIT_LD
-#include <soc-noinit.ld>
-#endif
-
-	} GROUP_LINK_IN(RAMABLE_REGION)
+#include <linker/cplusplus-ram.ld>
 
      _image_ram_end = .;
      _end = .; /* end of image */
@@ -207,6 +199,8 @@ SECTIONS
      GROUP_END(RAMABLE_REGION)
 
 #include <linker/debug-sections.ld>
+
+    /DISCARD/ : { *(.note.GNU-stack) }
 
     SECTION_PROLOGUE(.riscv.attributes, 0,)
 	{

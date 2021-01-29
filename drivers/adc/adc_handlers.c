@@ -8,7 +8,8 @@
 #include <syscall_handler.h>
 #include <kernel.h>
 
-Z_SYSCALL_HANDLER(adc_channel_setup, dev, user_channel_cfg)
+static inline int z_vrfy_adc_channel_setup(const struct device *dev,
+					   const struct adc_channel_cfg *user_channel_cfg)
 {
 	struct adc_channel_cfg channel_cfg;
 
@@ -17,8 +18,10 @@ Z_SYSCALL_HANDLER(adc_channel_setup, dev, user_channel_cfg)
 				(struct adc_channel_cfg *)user_channel_cfg,
 				sizeof(struct adc_channel_cfg)));
 
-	return z_impl_adc_channel_setup((struct device *)dev, &channel_cfg);
+	return z_impl_adc_channel_setup((const struct device *)dev,
+					&channel_cfg);
 }
+#include <syscalls/adc_channel_setup_mrsh.c>
 
 static bool copy_sequence(struct adc_sequence *dst,
 			  struct adc_sequence_options *options,
@@ -45,8 +48,9 @@ static bool copy_sequence(struct adc_sequence *dst,
 	return true;
 }
 
+static inline int z_vrfy_adc_read(const struct device *dev,
+				  const struct adc_sequence *user_sequence)
 
-Z_SYSCALL_HANDLER(adc_read, dev, user_sequence)
 {
 	struct adc_sequence sequence;
 	struct adc_sequence_options options;
@@ -60,11 +64,14 @@ Z_SYSCALL_HANDLER(adc_read, dev, user_sequence)
 			    "ADC sequence callbacks forbidden from user mode"));
 	}
 
-	return z_impl_adc_read((struct device *)dev, &sequence);
+	return z_impl_adc_read((const struct device *)dev, &sequence);
 }
+#include <syscalls/adc_read_mrsh.c>
 
 #ifdef CONFIG_ADC_ASYNC
-Z_SYSCALL_HANDLER(adc_read_async, dev, user_sequence, async)
+static inline int z_vrfy_adc_read_async(const struct device *dev,
+					const struct adc_sequence *user_sequence,
+					struct k_poll_signal *async)
 {
 	struct adc_sequence sequence;
 	struct adc_sequence_options options;
@@ -79,7 +86,8 @@ Z_SYSCALL_HANDLER(adc_read_async, dev, user_sequence, async)
 	}
 	Z_OOPS(Z_SYSCALL_OBJ(async, K_OBJ_POLL_SIGNAL));
 
-	return z_impl_adc_read_async((struct device *)dev, &sequence,
+	return z_impl_adc_read_async((const struct device *)dev, &sequence,
 				     (struct k_poll_signal *)async);
 }
+#include <syscalls/adc_read_async_mrsh.c>
 #endif /* CONFIG_ADC_ASYNC */

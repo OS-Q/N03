@@ -20,25 +20,30 @@ LOG_MODULE_REGISTER(sdhc_spi, CONFIG_DISK_LOG_LEVEL);
 /* Clock speed used after initialisation */
 #define SDHC_SPI_SPEED 4000000
 
-#ifndef DT_INST_0_ZEPHYR_MMC_SPI_SLOT_LABEL
+#define SPI_SDHC_NODE DT_INST(0, zephyr_mmc_spi_slot)
+
+#if !DT_NODE_HAS_STATUS(SPI_SDHC_NODE, okay)
 #warning NO SDHC slot specified on board
 #else
 struct sdhc_spi_data {
-	struct device *spi;
+	const struct device *spi;
 	struct spi_config cfg;
-	struct device *cs;
-	u32_t pin;
-
-	u32_t sector_count;
-	u8_t status;
+#if DT_SPI_DEV_HAS_CS_GPIOS(SPI_SDHC_NODE)
+	struct spi_cs_control cs;
+#endif
+	bool high_capacity;
+	uint32_t sector_count;
+	uint8_t status;
+#if LOG_LEVEL >= LOG_LEVEL_DBG
 	int trace_dir;
+#endif
 };
 
 DEVICE_DECLARE(sdhc_spi_0);
 
 /* Traces card traffic for LOG_LEVEL_DBG */
 static int sdhc_spi_trace(struct sdhc_spi_data *data, int dir, int err,
-		      const u8_t *buf, int len)
+		      const uint8_t *buf, int len)
 {
 #if LOG_LEVEL >= LOG_LEVEL_DBG
 	if (err != 0) {
@@ -65,18 +70,12 @@ static int sdhc_spi_trace(struct sdhc_spi_data *data, int dir, int err,
 	return err;
 }
 
-/* Asserts or deasserts chip select */
-static void sdhc_spi_set_cs(struct sdhc_spi_data *data, int value)
-{
-	gpio_pin_write(data->cs, data->pin, value);
-}
-
 /* Receives a fixed number of bytes */
-static int sdhc_spi_rx_bytes(struct sdhc_spi_data *data, u8_t *buf, int len)
+static int sdhc_spi_rx_bytes(struct sdhc_spi_data *data, uint8_t *buf, int len)
 {
 	struct spi_buf tx_bufs[] = {
 		{
-			.buf = (u8_t *)sdhc_ones,
+			.buf = (uint8_t *)sdhc_ones,
 			.len = len
 		}
 	};
@@ -106,7 +105,7 @@ static int sdhc_spi_rx_bytes(struct sdhc_spi_data *data, u8_t *buf, int len)
 /* Receives and returns a single byte */
 static int sdhc_spi_rx_u8(struct sdhc_spi_data *data)
 {
-	u8_t buf[1];
+	uint8_t buf[1];
 	int err = sdhc_spi_rx_bytes(data, buf, sizeof(buf));
 
 	if (err != 0) {
@@ -117,11 +116,11 @@ static int sdhc_spi_rx_u8(struct sdhc_spi_data *data)
 }
 
 /* Transmits a block of bytes */
-static int sdhc_spi_tx(struct sdhc_spi_data *data, const u8_t *buf, int len)
+static int sdhc_spi_tx(struct sdhc_spi_data *data, const uint8_t *buf, int len)
 {
 	struct spi_buf spi_bufs[] = {
 		{
-			.buf = (u8_t *)buf,
+			.buf = (uint8_t *)buf,
 			.len = len
 		}
 	};
@@ -137,9 +136,9 @@ static int sdhc_spi_tx(struct sdhc_spi_data *data, const u8_t *buf, int len)
 }
 
 /* Transmits the command and payload */
-static int sdhc_spi_tx_cmd(struct sdhc_spi_data *data, u8_t cmd, u32_t payload)
+static int sdhc_spi_tx_cmd(struct sdhc_spi_data *data, uint8_t cmd, uint32_t payload)
 {
-	u8_t buf[SDHC_CMD_SIZE];
+	uint8_t buf[SDHC_CMD_SIZE];
 
 	LOG_DBG("cmd%d payload=%u", cmd, payload);
 	sdhc_spi_trace(data, 0, 0, NULL, 0);
@@ -237,7 +236,7 @@ static int sdhc_spi_skip_until_ready(struct sdhc_spi_data *data)
 
 /* Sends a command and returns the received R1 status code */
 static int sdhc_spi_cmd_r1_raw(struct sdhc_spi_data *data,
-	u8_t cmd, u32_t payload)
+	uint8_t cmd, uint32_t payload)
 {
 	int err;
 
@@ -260,13 +259,13 @@ static int sdhc_spi_cmd_r1_raw(struct sdhc_spi_data *data,
 
 /* Sends a command and returns the mapped error code */
 static int sdhc_spi_cmd_r1(struct sdhc_spi_data *data,
-	u8_t cmd, uint32_t payload)
+	uint8_t cmd, uint32_t payload)
 {
 	return sdhc_map_r1_status(sdhc_spi_cmd_r1_raw(data, cmd, payload));
 }
 
 /* Sends a command in idle mode returns the mapped error code */
-static int sdhc_spi_cmd_r1_idle(struct sdhc_spi_data *data, u8_t cmd,
+static int sdhc_spi_cmd_r1_idle(struct sdhc_spi_data *data, uint8_t cmd,
 			    uint32_t payload)
 {
 	return sdhc_map_r1_idle_status(sdhc_spi_cmd_r1_raw(data, cmd, payload));
@@ -274,7 +273,7 @@ static int sdhc_spi_cmd_r1_idle(struct sdhc_spi_data *data, u8_t cmd,
 
 /* Sends a command and returns the received multi-byte R2 status code */
 static int sdhc_spi_cmd_r2(struct sdhc_spi_data *data,
-	u8_t cmd, uint32_t payload)
+	uint8_t cmd, uint32_t payload)
 {
 	int err;
 	int r1;
@@ -301,11 +300,11 @@ static int sdhc_spi_cmd_r2(struct sdhc_spi_data *data,
 
 /* Sends a command and returns the received multi-byte status code */
 static int sdhc_spi_cmd_r37_raw(struct sdhc_spi_data *data,
-	u8_t cmd, u32_t payload, u32_t *reply)
+	uint8_t cmd, uint32_t payload, uint32_t *reply)
 {
 	int err;
 	int status;
-	u8_t buf[sizeof(*reply)];
+	uint8_t buf[sizeof(*reply)];
 
 	err = sdhc_spi_tx_cmd(data, cmd, payload);
 	if (err != 0) {
@@ -330,7 +329,7 @@ static int sdhc_spi_cmd_r37_raw(struct sdhc_spi_data *data,
 
 /* Sends a command in idle mode returns the mapped error code */
 static int sdhc_spi_cmd_r7_idle(struct sdhc_spi_data *data,
-	u8_t cmd, u32_t payload, u32_t *reply)
+	uint8_t cmd, uint32_t payload, uint32_t *reply)
 {
 	return sdhc_map_r1_idle_status(
 		sdhc_spi_cmd_r37_raw(data, cmd, payload, reply));
@@ -338,7 +337,7 @@ static int sdhc_spi_cmd_r7_idle(struct sdhc_spi_data *data,
 
 /* Sends a command and returns the received multi-byte R3 error code */
 static int sdhc_spi_cmd_r3(struct sdhc_spi_data *data,
-	u8_t cmd, uint32_t payload, u32_t *reply)
+	uint8_t cmd, uint32_t payload, uint32_t *reply)
 {
 	return sdhc_map_r1_status(
 		sdhc_spi_cmd_r37_raw(data, cmd, payload, reply));
@@ -346,7 +345,7 @@ static int sdhc_spi_cmd_r3(struct sdhc_spi_data *data,
 
 /* Receives a SDHC data block */
 static int sdhc_spi_rx_block(struct sdhc_spi_data *data,
-	u8_t *buf, int len)
+	uint8_t *buf, int len)
 {
 	int err;
 	int token;
@@ -354,7 +353,7 @@ static int sdhc_spi_rx_block(struct sdhc_spi_data *data,
 	/* Note the one extra byte to ensure there's an idle byte
 	 * between commands.
 	 */
-	u8_t crc[SDHC_CRC16_SIZE + 1];
+	uint8_t crc[SDHC_CRC16_SIZE + 1];
 
 	token = sdhc_spi_skip(data, 0xFF);
 	if (token < 0) {
@@ -372,7 +371,7 @@ static int sdhc_spi_rx_block(struct sdhc_spi_data *data,
 
 		struct spi_buf tx_bufs[] = {
 			{
-				.buf = (u8_t *)sdhc_ones,
+				.buf = (uint8_t *)sdhc_ones,
 				.len = remain
 			}
 		};
@@ -418,9 +417,9 @@ static int sdhc_spi_rx_block(struct sdhc_spi_data *data,
 
 /* Transmits a SDHC data block */
 static int sdhc_spi_tx_block(struct sdhc_spi_data *data,
-	u8_t *send, int len)
+	uint8_t *send, int len)
 {
-	u8_t buf[SDHC_CRC16_SIZE];
+	uint8_t buf[SDHC_CRC16_SIZE];
 	int err;
 
 	/* Start the block */
@@ -456,20 +455,17 @@ static int sdhc_spi_recover(struct sdhc_spi_data *data)
 /* Attempts to return the card to idle mode */
 static int sdhc_spi_go_idle(struct sdhc_spi_data *data)
 {
-	sdhc_spi_set_cs(data, 1);
-
 	/* Write the initial >= 74 clocks */
 	sdhc_spi_tx(data, sdhc_ones, 10);
-
-	sdhc_spi_set_cs(data, 0);
+	spi_release(data->spi, &data->cfg);
 
 	return sdhc_spi_cmd_r1_idle(data, SDHC_GO_IDLE_STATE, 0);
 }
 
-/* Checks the supported host volatage and basic protocol */
-static int sdhc_spi_check_card(struct sdhc_spi_data *data)
+/* Checks the supported host voltage and basic protocol of a SDHC card */
+static int sdhc_spi_check_interface(struct sdhc_spi_data *data)
 {
-	u32_t cond;
+	uint32_t cond;
 	int err;
 
 	/* Check that the current voltage is supported */
@@ -496,11 +492,14 @@ static int sdhc_spi_check_card(struct sdhc_spi_data *data)
 static int sdhc_spi_detect(struct sdhc_spi_data *data)
 {
 	int err;
-	u32_t ocr;
+	uint32_t ocr;
 	struct sdhc_retry retry;
-	u8_t structure;
-	u32_t csize;
-	u8_t buf[SDHC_CSD_SIZE];
+	uint8_t structure;
+	uint8_t readbllen;
+	uint32_t csize;
+	uint8_t csizemult;
+	uint8_t buf[SDHC_CSD_SIZE];
+	bool is_v2;
 
 	data->cfg.frequency = SDHC_SPI_INITIAL_SPEED;
 	data->status = DISK_STATUS_UNINIT;
@@ -511,10 +510,9 @@ static int sdhc_spi_detect(struct sdhc_spi_data *data)
 	do {
 		err = sdhc_spi_go_idle(data);
 		if (err == 0) {
-			err = sdhc_spi_check_card(data);
-			if (err == 0) {
-				break;
-			}
+			err = sdhc_spi_check_interface(data);
+			is_v2 = (err == 0) ? true : false;
+			break;
 		}
 
 		if (!sdhc_retry_ok(&retry)) {
@@ -532,7 +530,8 @@ static int sdhc_spi_detect(struct sdhc_spi_data *data)
 	do {
 		sdhc_spi_cmd_r1_raw(data, SDHC_APP_CMD, 0);
 
-		err = sdhc_spi_cmd_r1(data, SDHC_SEND_OP_COND, SDHC_HCS);
+		/* Set HCS only if card conforms to specification v2.00 (cf. 4.2.3) */
+		err = sdhc_spi_cmd_r1(data, SDHC_SEND_OP_COND, is_v2 ? SDHC_HCS : 0);
 		if (err == 0) {
 			break;
 		}
@@ -543,15 +542,31 @@ static int sdhc_spi_detect(struct sdhc_spi_data *data)
 		return -ETIMEDOUT;
 	}
 
-	/* Read OCR and confirm this is a SDHC card */
-	err = sdhc_spi_cmd_r3(data, SDHC_READ_OCR, 0, &ocr);
-	if (err != 0) {
-		return err;
+	ocr = 0;
+	if (is_v2) {
+		do {
+			/* Read OCR to check if this is a SDSC or SDHC card.
+			 * CCS bit is valid after BUSY bit is set.
+			 */
+			err = sdhc_spi_cmd_r3(data, SDHC_READ_OCR, 0, &ocr);
+			if (err != 0) {
+				return err;
+			}
+			if ((ocr & SDHC_BUSY) != 0U) {
+				break;
+			}
+		} while (sdhc_retry_ok(&retry));
 	}
 
-	if ((ocr & SDHC_CCS) == 0U) {
-		/* A 'SDSC' card */
-		return -ENOTSUP;
+	if ((ocr & SDHC_CCS) != 0U) {
+		data->high_capacity = true;
+	} else {
+		/* A 'SDSC' card: Set block length to 512 bytes. */
+		data->high_capacity = false;
+		err = sdhc_spi_cmd_r1(data, SDHC_SET_BLOCK_SIZE, SDMMC_DEFAULT_BLOCK_SIZE);
+		if (err != 0) {
+			return err;
+		}
 	}
 
 	/* Read the CSD */
@@ -567,21 +582,42 @@ static int sdhc_spi_detect(struct sdhc_spi_data *data)
 
 	/* Bits 126..127 are the structure version */
 	structure = (buf[0] >> 6);
-	if (structure != SDHC_CSD_V2) {
+	switch (structure) {
+	case SDHC_CSD_V1:
+		/* The maximum read data block length is given by bits 80..83 raised
+		 * to the power of 2. Possible values are 9, 10 and 11 for 512, 1024
+		 * and 2048 bytes, respectively. This driver does not make use of block
+		 * lengths greater than 512 bytes, but forces 512 byte block transfers
+		 * instead.
+		 */
+		readbllen = buf[5] & ((1 << 4) - 1);
+		if ((readbllen < 9) || (readbllen > 11)) {
+			/* Invalid maximum read data block length (cf. section 5.3.2) */
+			return -ENOTSUP;
+		}
+		/* The capacity of the card is given by bits 62..73 plus 1 multiplied
+		 * by bits 47..49 plus 2 raised to the power of 2 in maximum read data
+		 * blocks.
+		 */
+		csize = (sys_get_be32(&buf[6]) >> 14) & ((1 << 12) - 1);
+		csizemult = (uint8_t) ((sys_get_be16(&buf[9]) >> 7) & ((1 << 3) - 1));
+		data->sector_count = ((csize + 1) << (csizemult + 2 + readbllen - 9));
+		break;
+	case SDHC_CSD_V2:
+		/* Bits 48..69 are the capacity of the card in 512 KiB units, minus 1.
+		 */
+		csize = sys_get_be32(&buf[6]) & ((1 << 22) - 1);
+		if (csize < 4112) {
+			/* Invalid capacity (cf. section 5.3.3) */
+			return -ENOTSUP;
+		}
+		data->sector_count = (csize + 1) *
+			(512 * 1024 / SDMMC_DEFAULT_BLOCK_SIZE);
+		break;
+	default:
 		/* Unsupported CSD format */
 		return -ENOTSUP;
 	}
-
-	/* Bits 48..69 are the capacity of the card in 512 KiB units, minus 1.
-	 */
-	csize = sys_get_be32(&buf[6]) & ((1 << 22) - 1);
-	if (csize < 4112) {
-		/* Invalid capacity according to section 5.3.3 */
-		return -ENOTSUP;
-	}
-
-	data->sector_count = (csize + 1) *
-		(512 * 1024 / SDMMC_DEFAULT_BLOCK_SIZE);
 
 	LOG_INF("Found a ~%u MiB SDHC card.",
 		data->sector_count / (1024 * 1024 / SDMMC_DEFAULT_BLOCK_SIZE));
@@ -610,19 +646,27 @@ static int sdhc_spi_detect(struct sdhc_spi_data *data)
 }
 
 static int sdhc_spi_read(struct sdhc_spi_data *data,
-	u8_t *buf, u32_t sector, u32_t count)
+	uint8_t *buf, uint32_t sector, uint32_t count)
 {
 	int err;
+	uint32_t addr;
 
 	err = sdhc_map_disk_status(data->status);
 	if (err != 0) {
 		return err;
 	}
 
-	sdhc_spi_set_cs(data, 0);
+	/* Translate sector number to data address.
+	 * SDSC cards use byte addressing, SDHC cards use block addressing.
+	 */
+	if (data->high_capacity) {
+		addr = sector;
+	} else {
+		addr = sector * SDMMC_DEFAULT_BLOCK_SIZE;
+	}
 
 	/* Send the start read command */
-	err = sdhc_spi_cmd_r1(data, SDHC_READ_MULTIPLE_BLOCK, sector);
+	err = sdhc_spi_cmd_r1(data, SDHC_READ_MULTIPLE_BLOCK, addr);
 	if (err != 0) {
 		goto error;
 	}
@@ -644,31 +688,39 @@ static int sdhc_spi_read(struct sdhc_spi_data *data,
 	err = sdhc_spi_skip_until_ready(data);
 
 error:
-	sdhc_spi_set_cs(data, 1);
+	spi_release(data->spi, &data->cfg);
 
 	return err;
 }
 
 static int sdhc_spi_write(struct sdhc_spi_data *data,
-	const u8_t *buf, u32_t sector, u32_t count)
+	const uint8_t *buf, uint32_t sector, uint32_t count)
 {
 	int err;
+	uint32_t addr;
 
 	err = sdhc_map_disk_status(data->status);
 	if (err != 0) {
 		return err;
 	}
 
-	sdhc_spi_set_cs(data, 0);
-
 	/* Write the blocks one-by-one */
 	for (; count != 0U; count--) {
-		err = sdhc_spi_cmd_r1(data, SDHC_WRITE_BLOCK, sector);
+		/* Translate sector number to data address.
+		 * SDSC cards use byte addressing, SDHC cards use block addressing.
+		 */
+		if (data->high_capacity) {
+			addr = sector;
+		} else {
+			addr = sector * SDMMC_DEFAULT_BLOCK_SIZE;
+		}
+
+		err = sdhc_spi_cmd_r1(data, SDHC_WRITE_BLOCK, addr);
 		if (err < 0) {
 			goto error;
 		}
 
-		err = sdhc_spi_tx_block(data, (u8_t *)buf,
+		err = sdhc_spi_tx_block(data, (uint8_t *)buf,
 			SDMMC_DEFAULT_BLOCK_SIZE);
 		if (err != 0) {
 			goto error;
@@ -691,46 +743,130 @@ static int sdhc_spi_write(struct sdhc_spi_data *data,
 
 	err = 0;
 error:
-	sdhc_spi_set_cs(data, 1);
+	spi_release(data->spi, &data->cfg);
 
 	return err;
 }
 
-static int disk_spi_sdhc_init(struct device *dev);
-
-static int sdhc_spi_init(struct device *dev)
+/* this function is optimized to write multiple blocks */
+static int sdhc_spi_write_multi(struct sdhc_spi_data *data,
+	const uint8_t *buf, uint32_t sector, uint32_t count)
 {
-	struct sdhc_spi_data *data = dev->driver_data;
+	int err;
+	uint32_t addr;
+	uint8_t block[SDHC_CRC16_SIZE];
 
-	data->spi = device_get_binding(DT_INST_0_ZEPHYR_MMC_SPI_SLOT_BUS_NAME);
+	err = sdhc_map_disk_status(data->status);
+	if (err != 0) {
+		return err;
+	}
+
+	if (data->high_capacity) {
+		addr = sector;
+	} else {
+		addr = sector * SDMMC_DEFAULT_BLOCK_SIZE;
+	}
+
+	err = sdhc_spi_cmd_r1(data, SDHC_WRITE_MULTIPLE_BLOCK, addr);
+	if (err < 0) {
+		goto exit;
+	}
+
+	/* Write the blocks */
+	for (; count != 0U; count--) {
+		/* Start the block */
+		block[0] = SDHC_TOKEN_MULTI_WRITE;
+		err = sdhc_spi_tx(data, block, 1);
+		if (err != 0) {
+			goto exit;
+		}
+
+		/* Write the payload */
+		err = sdhc_spi_tx(data, buf, SDMMC_DEFAULT_BLOCK_SIZE);
+		if (err != 0) {
+			goto exit;
+		}
+
+		/* Build and write the trailing CRC */
+		sys_put_be16(crc16_itu_t(0, buf, SDMMC_DEFAULT_BLOCK_SIZE),
+			     block);
+
+		err = sdhc_spi_tx(data, block, sizeof(block));
+		if (err != 0) {
+			goto exit;
+		}
+
+		err = sdhc_map_data_status(sdhc_spi_rx_u8(data));
+		if (err != 0) {
+			goto exit;
+		}
+
+		/* Wait for the card to finish programming */
+		err = sdhc_spi_skip_until_ready(data);
+		if (err != 0) {
+			goto exit;
+		}
+
+		buf += SDMMC_DEFAULT_BLOCK_SIZE;
+		sector++;
+	}
+
+	/* Stop the transmission */
+	sdhc_spi_tx_cmd(data, SDHC_STOP_TRANSMISSION, 0);
+
+	/* Wait for the card to finish operation */
+	err = sdhc_spi_skip_until_ready(data);
+	if (err != 0) {
+		goto exit;
+	}
+
+	err = 0;
+exit:
+	spi_release(data->spi, &data->cfg);
+
+	return err;
+}
+
+static int disk_spi_sdhc_init(const struct device *dev);
+
+static int sdhc_spi_init(const struct device *dev)
+{
+	struct sdhc_spi_data *data = dev->data;
+
+	data->spi = device_get_binding(DT_BUS_LABEL(SPI_SDHC_NODE));
 
 	data->cfg.frequency = SDHC_SPI_INITIAL_SPEED;
 	data->cfg.operation = SPI_WORD_SET(8) | SPI_HOLD_ON_CS;
-	data->cfg.slave = DT_INST_0_ZEPHYR_MMC_SPI_SLOT_BASE_ADDRESS;
-	data->cs = device_get_binding(
-		DT_INST_0_ZEPHYR_MMC_SPI_SLOT_CS_GPIOS_CONTROLLER);
-	__ASSERT_NO_MSG(data->cs != NULL);
+	data->cfg.slave = DT_REG_ADDR(SPI_SDHC_NODE);
 
-	data->pin = DT_INST_0_ZEPHYR_MMC_SPI_SLOT_CS_GPIOS_PIN;
+#if DT_SPI_DEV_HAS_CS_GPIOS(SPI_SDHC_NODE)
+	data->cs.gpio_dev =
+		device_get_binding(DT_SPI_DEV_CS_GPIOS_LABEL(SPI_SDHC_NODE));
+	__ASSERT_NO_MSG(data->cs.gpio_dev != NULL);
+
+	data->cs.gpio_pin = DT_SPI_DEV_CS_GPIOS_PIN(SPI_SDHC_NODE);
+	data->cs.gpio_dt_flags = DT_SPI_DEV_CS_GPIOS_FLAGS(SPI_SDHC_NODE);
+	data->cfg.cs = &data->cs;
+#endif
 
 	disk_spi_sdhc_init(dev);
 
-	return gpio_pin_configure(data->cs, data->pin, GPIO_DIR_OUT);
+	return 0;
 }
 
 static int disk_spi_sdhc_access_status(struct disk_info *disk)
 {
-	struct device *dev = disk->dev;
-	struct sdhc_spi_data *data = dev->driver_data;
+	const struct device *dev = disk->dev;
+	struct sdhc_spi_data *data = dev->data;
 
 	return data->status;
 }
 
 static int disk_spi_sdhc_access_read(struct disk_info *disk,
-	u8_t *buf, u32_t sector, u32_t count)
+	uint8_t *buf, uint32_t sector, uint32_t count)
 {
-	struct device *dev = disk->dev;
-	struct sdhc_spi_data *data = dev->driver_data;
+	const struct device *dev = disk->dev;
+	struct sdhc_spi_data *data = dev->data;
 	int err;
 
 	LOG_DBG("sector=%u count=%u", sector, count);
@@ -745,28 +881,38 @@ static int disk_spi_sdhc_access_read(struct disk_info *disk,
 }
 
 static int disk_spi_sdhc_access_write(struct disk_info *disk,
-	const u8_t *buf, u32_t sector, u32_t count)
+	const uint8_t *buf, uint32_t sector, uint32_t count)
 {
-	struct device *dev = disk->dev;
-	struct sdhc_spi_data *data = dev->driver_data;
+	const struct device *dev = disk->dev;
+	struct sdhc_spi_data *data = dev->data;
 	int err;
 
-	LOG_DBG("sector=%u count=%u", sector, count);
+	/* for more than 2 blocks the multiple block is preferred */
+	if (count > 2) {
+		LOG_DBG("multi block sector=%u count=%u", sector, count);
 
-	err = sdhc_spi_write(data, buf, sector, count);
-	if (err != 0 && sdhc_is_retryable(err)) {
-		sdhc_spi_recover(data);
+		err = sdhc_spi_write_multi(data, buf, sector, count);
+		if (err != 0 && sdhc_is_retryable(err)) {
+			sdhc_spi_recover(data);
+			err = sdhc_spi_write_multi(data, buf, sector, count);
+		}
+	} else {
+		LOG_DBG("sector=%u count=%u", sector, count);
+
 		err = sdhc_spi_write(data, buf, sector, count);
+		if (err != 0 && sdhc_is_retryable(err)) {
+			sdhc_spi_recover(data);
+			err = sdhc_spi_write(data, buf, sector, count);
+		}
 	}
-
 	return err;
 }
 
 static int disk_spi_sdhc_access_ioctl(struct disk_info *disk,
-	u8_t cmd, void *buf)
+	uint8_t cmd, void *buf)
 {
-	struct device *dev = disk->dev;
-	struct sdhc_spi_data *data = dev->driver_data;
+	const struct device *dev = disk->dev;
+	struct sdhc_spi_data *data = dev->data;
 	int err;
 
 	err = sdhc_map_disk_status(data->status);
@@ -778,13 +924,13 @@ static int disk_spi_sdhc_access_ioctl(struct disk_info *disk,
 	case DISK_IOCTL_CTRL_SYNC:
 		break;
 	case DISK_IOCTL_GET_SECTOR_COUNT:
-		*(u32_t *)buf = data->sector_count;
+		*(uint32_t *)buf = data->sector_count;
 		break;
 	case DISK_IOCTL_GET_SECTOR_SIZE:
-		*(u32_t *)buf = SDMMC_DEFAULT_BLOCK_SIZE;
+		*(uint32_t *)buf = SDMMC_DEFAULT_BLOCK_SIZE;
 		break;
 	case DISK_IOCTL_GET_ERASE_BLOCK_SZ:
-		*(u32_t *)buf = SDMMC_DEFAULT_BLOCK_SIZE;
+		*(uint32_t *)buf = SDMMC_DEFAULT_BLOCK_SIZE;
 		break;
 	default:
 		return -EINVAL;
@@ -795,17 +941,12 @@ static int disk_spi_sdhc_access_ioctl(struct disk_info *disk,
 
 static int disk_spi_sdhc_access_init(struct disk_info *disk)
 {
-	struct device *dev = disk->dev;
-	struct sdhc_spi_data *data = dev->driver_data;
+	const struct device *dev = disk->dev;
+	struct sdhc_spi_data *data = dev->data;
 	int err;
 
-	if (data->status == DISK_STATUS_OK) {
-		/* Called twice, don't re-init. */
-		return 0;
-	}
-
 	err = sdhc_spi_detect(data);
-	sdhc_spi_set_cs(data, 1);
+	spi_release(data->spi, &data->cfg);
 
 	return err;
 }
@@ -823,9 +964,9 @@ static struct disk_info spi_sdhc_disk = {
 	.ops = &spi_sdhc_disk_ops,
 };
 
-static int disk_spi_sdhc_init(struct device *dev)
+static int disk_spi_sdhc_init(const struct device *dev)
 {
-	struct sdhc_spi_data *data = dev->driver_data;
+	struct sdhc_spi_data *data = dev->data;
 
 	data->status = DISK_STATUS_UNINIT;
 
@@ -837,7 +978,7 @@ static int disk_spi_sdhc_init(struct device *dev)
 static struct sdhc_spi_data sdhc_spi_data_0;
 
 DEVICE_AND_API_INIT(sdhc_spi_0,
-	DT_INST_0_ZEPHYR_MMC_SPI_SLOT_LABEL,
+	DT_LABEL(SPI_SDHC_NODE),
 	sdhc_spi_init, &sdhc_spi_data_0, NULL,
 	APPLICATION, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, NULL);
 #endif

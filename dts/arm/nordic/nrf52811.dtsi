@@ -9,6 +9,11 @@
 #include "nrf5_common.dtsi"
 
 / {
+	chosen {
+		zephyr,entropy = &rng;
+		zephyr,flash-controller = &flash_controller;
+	};
+
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -20,27 +25,9 @@
 		};
 	};
 
-	aliases {
-		i2c-0 = &i2c0;
-		spi-0 = &spi0;
-		spi-1 = &spi1;
-		uart-0 = &uart0;
-		adc-0 = &adc;
-		gpio-0 = &gpio0;
-		gpiote-0 = &gpiote;
-		wdt-0 = &wdt;
-		pwm-0 = &pwm0;
-		qdec-0 = &qdec;
-		rtc-0 = &rtc0;
-		rtc-1 = &rtc1;
-		timer-0 = &timer0;
-		timer-1 = &timer1;
-		timer-2 = &timer2;
-	};
-
 	soc {
 
-		flash-controller@4001e000 {
+		flash_controller: flash-controller@4001e000 {
 			compatible = "nordic,nrf52-flash-controller";
 			reg = <0x4001e000 0x1000>;
 
@@ -67,6 +54,7 @@
 			interrupts = <7 1>;
 			status = "disabled";
 			label = "ADC_0";
+			#io-channel-cells = <1>;
 		};
 
 		clock: clock@40000000 {
@@ -107,7 +95,13 @@
 		};
 
 		i2c0: i2c@40003000 {
-			compatible = "nordic,nrf-i2c";
+			/*
+			 * This i2c node can be TWI, TWIM, or TWIS,
+			 * for the user to pick:
+			 * compatible = "nordic,nrf-twi" or
+			 *              "nordic,nrf-twim" or
+			 *              "nordic,nrf-twis".
+			 */
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0x40003000 0x1000>;
@@ -123,6 +117,7 @@
 			interrupts = <28 1>;
 			status = "disabled";
 			label = "PWM_0";
+			#pwm-cells = <1>;
 		};
 
 		qdec: qdec@40012000 {
@@ -133,8 +128,22 @@
 			label = "QDEC";
 		};
 
+		rng: random@4000d000 {
+			compatible = "nordic,nrf-rng";
+			reg = <0x4000d000 0x1000>;
+			interrupts = <13 1>;
+			status = "okay";
+			label = "RNG";
+		};
+
 		spi0: spi@40004000 {
-			compatible = "nordic,nrf-spi";
+			/*
+			 * This spi node can be SPI, SPIM, or SPIS,
+			 * for the user to pick:
+			 * compatible = "nordic,nrf-spi" or
+			 *              "nordic,nrf-spim" or
+			 *              "nordic,nrf-spis".
+			 */
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0x40004000 0x1000>;
@@ -145,7 +154,13 @@
 
 		spi1: spi@40003000 {
 		/* cannot be used with i2c0 */
-			compatible = "nordic,nrf-spi";
+			/*
+			 * This spi node can be SPI, SPIM, or SPIS,
+			 * for the user to pick:
+			 * compatible = "nordic,nrf-spi" or
+			 *              "nordic,nrf-spim" or
+			 *              "nordic,nrf-spis".
+			 */
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0x40003000 0x1000>;
@@ -209,7 +224,7 @@
 			label = "TEMP_0";
 		};
 
-		wdt: watchdog@40010000 {
+		wdt: wdt0: watchdog@40010000 {
 			compatible = "nordic,nrf-watchdog";
 			reg = <0x40010000 0x1000>;
 			interrupts = <16 1>;
@@ -229,4 +244,5 @@
 	clock-prescaler = <0>;
 	ppi-base = <14>;
 	gpiote-base = <0>;
+	#pwm-cells = <1>;
 };

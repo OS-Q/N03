@@ -8,6 +8,8 @@ from os import path
 
 from runners.core import ZephyrBinaryRunner, RunnerCaps
 
+import sys
+
 
 class Esp32BinaryRunner(ZephyrBinaryRunner):
     '''Runner front-end for espidf.'''
@@ -15,7 +17,7 @@ class Esp32BinaryRunner(ZephyrBinaryRunner):
     def __init__(self, cfg, device, baud=921600, flash_size='detect',
                  flash_freq='40m', flash_mode='dio', espidf='espidf',
                  bootloader_bin=None, partition_table_bin=None):
-        super(Esp32BinaryRunner, self).__init__(cfg)
+        super().__init__(cfg)
         self.elf = cfg.elf_file
         self.device = device
         self.baud = baud
@@ -61,7 +63,7 @@ class Esp32BinaryRunner(ZephyrBinaryRunner):
                             help='Partition table to flash')
 
     @classmethod
-    def create(cls, cfg, args):
+    def do_create(cls, cfg, args):
         if args.esp_tool:
             espidf = args.esp_tool
         else:
@@ -85,6 +87,11 @@ class Esp32BinaryRunner(ZephyrBinaryRunner):
                      '--flash_mode', self.flash_mode,
                      '--flash_freq', self.flash_freq,
                      '--flash_size', self.flash_size]
+
+        # Execute Python interpreter if calling a Python script
+        if self.espidf.lower().endswith(".py") and sys.executable:
+            cmd_convert.insert(0, sys.executable)
+            cmd_flash.insert(0, sys.executable)
 
         if self.bootloader_bin:
             cmd_flash.extend(['0x1000', self.bootloader_bin])
