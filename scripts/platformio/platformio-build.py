@@ -55,6 +55,7 @@ PLATFORMS_WITH_EXTERNAL_HAL = {
     "siliconlabsefm32": ["st", "silabs"],
     "nordicnrf51": ["st", "nordic"],
     "nordicnrf52": ["st", "nordic"],
+    "P01": ["st", "stm32"],
     "P09": ["st", "nordic"],
     "nxplpc": ["st", "nxp"],
     "nxpimxrt": ["st", "nxp"],
