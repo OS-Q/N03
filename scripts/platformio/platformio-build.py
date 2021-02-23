@@ -50,13 +50,10 @@ CMAKE_API_REPLY_DIR = os.path.join(CMAKE_API_DIR, "reply")
 PLATFORMS_WITH_EXTERNAL_HAL = {
     "atmelsam": ["st", "atmel"],
     "chipsalliance": ["swervolf"],
-    "freescalekinetis": ["st", "nxp"],
     "ststm32": ["st", "stm32"],
-    "siliconlabsefm32": ["st", "silabs"],
-    "nordicnrf51": ["st", "nordic"],
+    "P21": ["st", "stm32"],
     "nordicnrf52": ["st", "nordic"],
-    "P01": ["st", "stm32"],
-    "P09": ["st", "nordic"],
+    "P41": ["st", "nordic"],
     "nxplpc": ["st", "nxp"],
     "nxpimxrt": ["st", "nxp"],
 }
