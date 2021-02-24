@@ -36,8 +36,8 @@ except ImportError:
 platform = env.PioPlatform()
 board = env.BoardConfig()
 
-FRAMEWORK_DIR = platform.get_package_dir("framework-zephyr")
-FRAMEWORK_VERSION = platform.get_package_version("framework-zephyr")
+FRAMEWORK_DIR = platform.get_package_dir("zephyr")
+FRAMEWORK_VERSION = platform.get_package_version("zephyr")
 assert os.path.isdir(FRAMEWORK_DIR)
 
 BUILD_DIR = env.subst("$BUILD_DIR")
@@ -204,7 +204,7 @@ def run_cmake():
 
     zephyr_modules = []
     for m in get_zephyr_modules():
-        module_name = "framework-zephyr-" + m["name"].replace("_", "-")
+        module_name = "zephyr-" + m["name"].replace("_", "-")
         try:
             module_path = platform.get_package_dir(module_name)
         except KeyError:
@@ -216,13 +216,13 @@ def run_cmake():
     if platform_name in PLATFORMS_WITH_EXTERNAL_HAL:
         zephyr_modules.extend(
             [
-                platform.get_package_dir("framework-zephyr-hal-" + m)
+                platform.get_package_dir("zephyr-hal-" + m)
                 for m in PLATFORMS_WITH_EXTERNAL_HAL[platform_name]
             ]
         )
 
     if get_board_architecture(board) == "arm":
-        zephyr_modules.append(platform.get_package_dir("framework-zephyr-cmsis"))
+        zephyr_modules.append(platform.get_package_dir("zephyr-cmsis"))
 
     if zephyr_modules:
         zephyr_modules = [
@@ -631,7 +631,7 @@ def compile_source_files(config, default_env, project_src_dir, prepend_dir=None)
                 local_path = os.path.join(project_src_dir, config["paths"]["source"])
             obj_path_temp = os.path.join(
                 "$BUILD_DIR",
-                prepend_dir or config["name"].replace("framework-zephyr", ""),
+                prepend_dir or config["name"].replace("zephyr", ""),
                 config["paths"]["build"],
             )
             if src_path.startswith(local_path):
