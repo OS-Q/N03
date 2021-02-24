@@ -203,14 +203,14 @@ def run_cmake():
         )
 
     zephyr_modules = []
-    for m in get_zephyr_modules():
-        module_name = "zephyr-" + m["name"].replace("_", "-")
-        try:
-            module_path = platform.get_package_dir(module_name)
-        except KeyError:
-            print("Warning! Missing Zephyr module " + module_name)
-            continue
-        zephyr_modules.append(module_path)
+    # for m in get_zephyr_modules():
+    #     module_name = "zephyr-" + m["name"].replace("_", "-")
+    #     try:
+    #         module_path = platform.get_package_dir(module_name)
+    #     except KeyError:
+    #         print("Warning! Missing Zephyr module " + module_name)
+    #         continue
+    #     zephyr_modules.append(module_path)
 
     for m in get_zephyr_modules():
         module_name = "framework-zephyr-" + m["name"].replace("_", "-")
