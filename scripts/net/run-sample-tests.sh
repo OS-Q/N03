@@ -428,9 +428,9 @@ while test -n "$1"
 do
     case "$1" in
 	-Z|--zephyr-dir)
-	    shift
-	    ZEPHYR_BASE="$1"
-	    ;;
+		shift
+		ZEPHYR_BASE="$1"
+		;;
 
 	-N|--net-tools-dir)
 	    shift
