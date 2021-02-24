@@ -212,6 +212,15 @@ def run_cmake():
             continue
         zephyr_modules.append(module_path)
 
+    for m in get_zephyr_modules():
+        module_name = "framework-zephyr-" + m["name"].replace("_", "-")
+        try:
+            module_path = platform.get_package_dir(module_name)
+        except KeyError:
+            print("Warning! Missing framework Zephyr module " + module_name)
+            continue
+        zephyr_modules.append(module_path)
+
     platform_name = env.subst("$PIOPLATFORM")
     if platform_name in PLATFORMS_WITH_EXTERNAL_HAL:
         zephyr_modules.extend(
