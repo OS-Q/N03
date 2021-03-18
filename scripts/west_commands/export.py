@@ -55,7 +55,7 @@ def run_cmake_export(path):
     # information.
 
     lines = run_cmake(['-P', str(path / 'zephyr_export.cmake')],
-                        capture_output=True)
+                      capture_output=True)
     msg = [line for line in lines if not line.startswith('-- ')]
     log.inf('\n'.join(msg))
 
