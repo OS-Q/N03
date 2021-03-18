@@ -235,13 +235,13 @@ def run_cmake():
     if platform_name in PLATFORMS_WITH_EXTERNAL_HAL:
         zephyr_modules.extend(
             [
-                platform.get_package_dir("framework-zephyr-hal-" + m)
+                platform.get_package_dir("zephyr-hal-" + m)
                 for m in PLATFORMS_WITH_EXTERNAL_HAL[platform_name]
             ]
         )
 
     if get_board_architecture(board) == "arm":
-        zephyr_modules.append(platform.get_package_dir("framework-zephyr-cmsis"))
+        zephyr_modules.append(platform.get_package_dir("zephyr-cmsis"))
 
     if zephyr_modules:
         zephyr_modules = [
