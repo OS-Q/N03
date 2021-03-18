@@ -49,8 +49,8 @@ except ImportError:
 platform = env.PioPlatform()
 board = env.BoardConfig()
 
-FRAMEWORK_DIR = platform.get_package_dir("framework-zephyros")
-FRAMEWORK_VERSION = platform.get_package_version("framework-zephyros")
+FRAMEWORK_DIR = platform.get_package_dir("zephyros")
+FRAMEWORK_VERSION = platform.get_package_version("zephyros")
 assert os.path.isdir(FRAMEWORK_DIR)
 
 BUILD_DIR = env.subst("$BUILD_DIR")
@@ -65,7 +65,6 @@ PLATFORMS_WITH_EXTERNAL_HAL = {
     "chipsalliance": ["swervolf"],
     "freescalekinetis": ["st", "nxp"],
     "ststm32": ["st", "stm32"],
-    "P21": ["st", "stm32"],
     "siliconlabsefm32": ["st", "silabs"],
     "nordicnrf51": ["st", "nordic"],
     "nordicnrf52": ["st", "nordic"],
@@ -224,7 +223,7 @@ def run_cmake():
 
     zephyr_modules = []
     for m in get_zephyr_modules():
-        module_name = "framework-zephyros-" + m["name"].replace("_", "-")
+        module_name = "framework-zephyr-" + m["name"].replace("_", "-")
         try:
             module_path = platform.get_package_dir(module_name)
         except KeyError:
@@ -236,13 +235,13 @@ def run_cmake():
     if platform_name in PLATFORMS_WITH_EXTERNAL_HAL:
         zephyr_modules.extend(
             [
-                platform.get_package_dir("framework-zephyros-hal-" + m)
+                platform.get_package_dir("framework-zephyr-hal-" + m)
                 for m in PLATFORMS_WITH_EXTERNAL_HAL[platform_name]
             ]
         )
 
     if get_board_architecture(board) == "arm":
-        zephyr_modules.append(platform.get_package_dir("framework-zephyros-cmsis"))
+        zephyr_modules.append(platform.get_package_dir("framework-zephyr-cmsis"))
 
     if zephyr_modules:
         zephyr_modules = [
@@ -651,7 +650,7 @@ def compile_source_files(config, default_env, project_src_dir, prepend_dir=None)
                 local_path = os.path.join(project_src_dir, config["paths"]["source"])
             obj_path_temp = os.path.join(
                 "$BUILD_DIR",
-                prepend_dir or config["name"].replace("framework-zephyros", ""),
+                prepend_dir or config["name"].replace("zephyros", ""),
                 config["paths"]["build"],
             )
             if src_path.startswith(local_path):
@@ -1148,4 +1147,6 @@ if get_board_architecture(board) == "arm":
 env.AddPlatformTarget(
     "menuconfig",
     None,
-    [env.VerboseAction(RunMenuconfig, "Running menu
+    [env.VerboseAction(RunMenuconfig, "Running menuconfig...")],
+    "Run Menuconfig",
+)
