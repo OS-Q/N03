@@ -26,7 +26,7 @@
 # 1.1. zephyr_*
 #
 # The following methods are for modifying the CMake library[0] called
-# "zephyr". zephyr is a catch-all CMake library for source files that
+# "zephyros". zephyr is a catch-all CMake library for source files that
 # can be built purely with the include paths, defines, and other
 # compiler flags that all zephyr source files use.
 # [0] https://cmake.org/cmake/help/latest/manual/cmake-buildsystem.7.html
@@ -1665,7 +1665,7 @@ function(find_appropriate_cache_directory dir)
   # files. Prefer a directory outside of the git repository because it
   # is good practice to have clean git repositories.
   if(DEFINED user_dir)
-    # Zephyr's cache files go in the "zephyr" subdirectory of the
+    # Zephyr's cache files go in the "zephyros" subdirectory of the
     # user's cache directory.
     set(local_dir ${user_dir}/zephyr)
   else()

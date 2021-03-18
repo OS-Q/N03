@@ -29,7 +29,7 @@ static const struct adsp_ipc_fw_ready fw_ready_apl
 		.date = __DATE__,
 		.time = __TIME__,
 
-		.tag = "zephyr",
+		.tag = "zephyros",
 		.abi_version = 0,
 	},
 	.flags = 0,
