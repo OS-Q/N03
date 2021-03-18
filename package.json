@@ -1,6 +1,6 @@
 {
-  "name": "zephyr",
-  "version": "2.20400.202102",
+  "name": "zephyros",
+  "version": "2.4.202103",
   "description": "Zephyr is a new generation, scalable, optimized, secure RTOS for multiple hardware architectures",
   "keywords": [
     "framework",
