@@ -70,7 +70,7 @@ def test_get_toolchain(class_testsuite, monkeypatch, capsys):
     and check if appropriate error is raised"""
     monkeypatch.setenv("ZEPHYR_TOOLCHAIN_VARIANT", "zephyr")
     toolchain = class_testsuite.get_toolchain()
-    assert toolchain in ["zephyr"]
+    assert toolchain in ["zephyros"]
 
     monkeypatch.delenv("ZEPHYR_TOOLCHAIN_VARIANT", raising=False)
     with pytest.raises(SystemExit):

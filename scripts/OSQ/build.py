@@ -36,8 +36,8 @@ except ImportError:
 platform = env.PioPlatform()
 board = env.BoardConfig()
 
-FRAMEWORK_DIR = platform.get_package_dir("zephyr")
-FRAMEWORK_VERSION = platform.get_package_version("zephyr")
+FRAMEWORK_DIR = platform.get_package_dir("zephyros")
+FRAMEWORK_VERSION = platform.get_package_version("zephyros")
 assert os.path.isdir(FRAMEWORK_DIR)
 
 BUILD_DIR = env.subst("$BUILD_DIR")
@@ -108,7 +108,7 @@ def populate_zephyr_env_vars(zephyr_env, board_config):
 
 
 def is_proper_zephyr_project():
-    return os.path.isfile(os.path.join(PROJECT_DIR, "zephyr", "CMakeLists.txt"))
+    return os.path.isfile(os.path.join(PROJECT_DIR, "zephyros", "CMakeLists.txt"))
 
 
 def create_default_project_files():
@@ -127,7 +127,7 @@ void main(void)
 }
 """
 
-    cmake_txt_file = os.path.join(PROJECT_DIR, "zephyr", "CMakeLists.txt")
+    cmake_txt_file = os.path.join(PROJECT_DIR, "zephyros", "CMakeLists.txt")
     if not os.path.isfile(cmake_txt_file):
         os.makedirs(os.path.dirname(cmake_txt_file))
         with open(cmake_txt_file, "w") as fp:
@@ -141,10 +141,10 @@ void main(void)
 
 def is_cmake_reconfigure_required():
     cmake_cache_file = os.path.join(BUILD_DIR, "CMakeCache.txt")
-    cmake_txt_file = os.path.join(PROJECT_DIR, "zephyr", "CMakeLists.txt")
-    cmake_preconf_dir = os.path.join(BUILD_DIR, "zephyr", "include", "generated")
-    cmake_preconf_misc = os.path.join(BUILD_DIR, "zephyr", "misc", "generated")
-    zephyr_prj_conf = os.path.join(PROJECT_DIR, "zephyr", "prj.conf")
+    cmake_txt_file = os.path.join(PROJECT_DIR, "zephyros", "CMakeLists.txt")
+    cmake_preconf_dir = os.path.join(BUILD_DIR, "zephyros", "include", "generated")
+    cmake_preconf_misc = os.path.join(BUILD_DIR, "zephyros", "misc", "generated")
+    zephyr_prj_conf = os.path.join(PROJECT_DIR, "zephyros", "prj.conf")
 
     for d in (CMAKE_API_REPLY_DIR, cmake_preconf_dir, cmake_preconf_misc):
         if not os.path.isdir(d) or not os.listdir(d):
@@ -186,7 +186,7 @@ def run_cmake():
     cmake_cmd = [
         os.path.join(platform.get_package_dir("tool-cmake") or "", "bin", "cmake"),
         "-S",
-        os.path.join(PROJECT_DIR, "zephyr"),
+        os.path.join(PROJECT_DIR, "zephyros"),
         "-B",
         BUILD_DIR,
         "-G",
@@ -356,7 +356,7 @@ def generate_includible_file(source_file):
 
     return env.Command(
         os.path.join(
-            "$BUILD_DIR", "zephyr", "include", "generated", "${SOURCE.file}.inc"
+            "$BUILD_DIR", "zephyros", "include", "generated", "${SOURCE.file}.inc"
         ),
         env.File(source_file),
         env.VerboseAction(" ".join(cmd), "Generating file $TARGET"),
@@ -365,7 +365,7 @@ def generate_includible_file(source_file):
 
 def generate_kobject_files():
     kobj_files = (
-        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", f)
+        os.path.join("$BUILD_DIR", "zephyros", "include", "generated", f)
         for f in ("kobj-types-enum.h", "otype-to-str.h", "otype-to-size.h")
     )
 
@@ -377,14 +377,14 @@ def generate_kobject_files():
         '"%s"' % os.path.join(FRAMEWORK_DIR, "scripts", "gen_kobject_list.py"),
         "--kobj-types-output",
         os.path.join(
-            "$BUILD_DIR", "zephyr", "include", "generated", "kobj-types-enum.h"
+            "$BUILD_DIR", "zephyros", "include", "generated", "kobj-types-enum.h"
         ),
         "--kobj-otype-output",
-        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "otype-to-str.h"),
+        os.path.join("$BUILD_DIR", "zephyros", "include", "generated", "otype-to-str.h"),
         "--kobj-size-output",
-        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "otype-to-size.h"),
+        os.path.join("$BUILD_DIR", "zephyros", "include", "generated", "otype-to-size.h"),
         "--include",
-        os.path.join("$BUILD_DIR", "zephyr", "misc", "generated", "struct_tags.json"),
+        os.path.join("$BUILD_DIR", "zephyros", "misc", "generated", "struct_tags.json"),
     )
 
     env.Execute(env.VerboseAction(" ".join(cmd), "Generating KObject files..."))
@@ -393,7 +393,7 @@ def generate_kobject_files():
 def validate_driver():
 
     driver_header = os.path.join(
-        "$BUILD_DIR", "zephyr", "include", "generated", "driver-validation.h"
+        "$BUILD_DIR", "zephyros", "include", "generated", "driver-validation.h"
     )
 
     if os.path.isfile(env.subst(driver_header)):
@@ -405,7 +405,7 @@ def validate_driver():
         "--validation-output",
         driver_header,
         "--include",
-        os.path.join("$BUILD_DIR", "zephyr", "misc", "generated", "struct_tags.json"),
+        os.path.join("$BUILD_DIR", "zephyros", "misc", "generated", "struct_tags.json"),
     )
 
     env.Execute(env.VerboseAction(" ".join(cmd), "Validating driver..."))
@@ -413,11 +413,11 @@ def validate_driver():
 
 def parse_syscalls():
     syscalls_config = os.path.join(
-        "$BUILD_DIR", "zephyr", "misc", "generated", "syscalls.json"
+        "$BUILD_DIR", "zephyros", "misc", "generated", "syscalls.json"
     )
 
     struct_tags = os.path.join(
-        "$BUILD_DIR", "zephyr", "misc", "generated", "struct_tags.json"
+        "$BUILD_DIR", "zephyros", "misc", "generated", "struct_tags.json"
     )
 
     if not all(os.path.isfile(env.subst(f)) for f in (syscalls_config, struct_tags)):
@@ -450,7 +450,7 @@ def parse_syscalls():
 
 def generate_syscall_files(syscalls_json, project_settings):
     syscalls_header = os.path.join(
-        BUILD_DIR, "zephyr", "include", "generated", "syscall_list.h"
+        BUILD_DIR, "zephyros", "include", "generated", "syscall_list.h"
     )
 
     if os.path.isfile(syscalls_header):
@@ -462,10 +462,10 @@ def generate_syscall_files(syscalls_json, project_settings):
         "--json-file",
         syscalls_json,
         "--base-output",
-        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "syscalls"),
+        os.path.join("$BUILD_DIR", "zephyros", "include", "generated", "syscalls"),
         "--syscall-dispatch",
         os.path.join(
-            "$BUILD_DIR", "zephyr", "include", "generated", "syscall_dispatch.c"
+            "$BUILD_DIR", "zephyros", "include", "generated", "syscall_dispatch.c"
         ),
         "--syscall-list",
         syscalls_header,
@@ -503,7 +503,7 @@ def get_linkerscript_final_cmd(app_config, base_ld_script):
     cmd.extend(['-I"%s"' % inc for inc in includes["plain_includes"]])
 
     return env.Command(
-        os.path.join("$BUILD_DIR", "zephyr", "linker_pass_final.cmd"),
+        os.path.join("$BUILD_DIR", "zephyros", "linker_pass_final.cmd"),
         base_ld_script,
         env.VerboseAction(" ".join(cmd), "Generating final linker script $TARGET"),
     )
@@ -546,7 +546,7 @@ def get_linkerscript_cmd(app_config, base_ld_script):
     cmd.extend(['-I"%s"' % inc for inc in includes["plain_includes"]])
 
     return env.Command(
-        os.path.join("$BUILD_DIR", "zephyr", "linker.cmd"),
+        os.path.join("$BUILD_DIR", "zephyros", "linker.cmd"),
         base_ld_script,
         env.VerboseAction(" ".join(cmd), "Generating linker script $TARGET"),
     )
@@ -634,13 +634,13 @@ def compile_source_files(config, default_env, project_src_dir, prepend_dir=None)
             src_path = source.get("path")
             if not os.path.isabs(src_path):
                 # For cases when sources are located near CMakeLists.txt
-                src_path = os.path.join(PROJECT_DIR, "zephyr", src_path)
+                src_path = os.path.join(PROJECT_DIR, "zephyros", src_path)
             local_path = config["paths"]["source"]
             if not os.path.isabs(local_path):
                 local_path = os.path.join(project_src_dir, config["paths"]["source"])
             obj_path_temp = os.path.join(
                 "$BUILD_DIR",
-                prepend_dir or config["name"].replace("zephyr", ""),
+                prepend_dir or config["name"].replace("zephyros", ""),
                 config["paths"]["build"],
             )
             if src_path.startswith(local_path):
@@ -664,7 +664,7 @@ def get_app_includes(app_config):
         app_config["compileGroups"][0], FRAMEWORK_DIR)
     # Add path with pregenerated headers
     includes["plain_includes"].append(
-        os.path.join(BUILD_DIR, "zephyr", "include", "generated")
+        os.path.join(BUILD_DIR, "zephyros", "include", "generated")
     )
 
     return includes
@@ -765,7 +765,7 @@ def generate_isr_list_binary(preliminary_elf, board):
     ]
 
     return env.Command(
-        os.path.join("$BUILD_DIR", "zephyr", "isrList.bin"),
+        os.path.join("$BUILD_DIR", "zephyros", "isrList.bin"),
         preliminary_elf,
         env.VerboseAction(" ".join(cmd), "Generating ISR list $TARGET"),
     )
@@ -783,7 +783,7 @@ def generate_isr_table_file_cmd(preliminary_elf, board_config):
         "${SOURCES[1]}",
     ]
 
-    config_file = os.path.join(BUILD_DIR, "zephyr", ".config")
+    config_file = os.path.join(BUILD_DIR, "zephyros", ".config")
 
     if os.path.isfile(config_file):
         with open(config_file) as fp:
@@ -794,8 +794,8 @@ def generate_isr_table_file_cmd(preliminary_elf, board_config):
             cmd.append("--vector-table")
 
     cmd = env.Command(
-        os.path.join("$BUILD_DIR", "zephyr", "isr_tables.c"),
-        [preliminary_elf, os.path.join("$BUILD_DIR", "zephyr", "isrList.bin")],
+        os.path.join("$BUILD_DIR", "zephyros", "isr_tables.c"),
+        [preliminary_elf, os.path.join("$BUILD_DIR", "zephyros", "isrList.bin")],
         env.VerboseAction(" ".join(cmd), "Generating ISR table $TARGET"),
     )
 
@@ -815,11 +815,11 @@ def generate_offset_header_file_cmd():
     ]
 
     return env.Command(
-        os.path.join("$BUILD_DIR", "zephyr", "include", "generated", "offsets.h"),
+        os.path.join("$BUILD_DIR", "zephyros", "include", "generated", "offsets.h"),
         os.path.join(
             "$BUILD_DIR",
             "offsets",
-            "zephyr",
+            "zephyros",
             "arch",
             get_board_architecture(board),
             "core",
@@ -852,7 +852,7 @@ def filter_args(args, allowed, ignore=None):
 
 def load_project_settings():
     result = {}
-    autoconf = os.path.join(BUILD_DIR, "zephyr", "include", "generated", "autoconf.h")
+    autoconf = os.path.join(BUILD_DIR, "zephyros", "include", "generated", "autoconf.h")
     if not os.path.isfile(autoconf):
         print("Warning! Cannot find autoconf file. Project settings won't be processed")
         return result
@@ -995,11 +995,11 @@ offsets_lib = build_library(env, target_configs["offsets"], PROJECT_SRC_DIR)
 preliminary_elf_path = os.path.join("$BUILD_DIR", "firmware-pre.elf")
 
 env.Depends(
-    preliminary_elf_path, os.path.join(BUILD_DIR, "zephyr", "kernel", "libkernel.a")
+    preliminary_elf_path, os.path.join(BUILD_DIR, "zephyros", "kernel", "libkernel.a")
 )
 env.Depends(
     preliminary_elf_path,
-    os.path.join(BUILD_DIR, "zephyr", "arch", "common", "libisr_tables.a"),
+    os.path.join(BUILD_DIR, "zephyros", "arch", "common", "libisr_tables.a"),
 )
 
 for dep in (offsets_lib, preliminary_ld_script):
@@ -1066,8 +1066,8 @@ env.Append(
     _LIBFLAGS=" -Wl,--no-whole-archive "
     + " ".join(
         [
-            os.path.join(BUILD_DIR, "zephyr", "kernel", "libkernel.a"),
-            os.path.join(BUILD_DIR, "zephyr", "arch", "common", "libisr_tables.a"),
+            os.path.join(BUILD_DIR, "zephyros", "kernel", "libkernel.a"),
+            os.path.join(BUILD_DIR, "zephyros", "arch", "common", "libisr_tables.a"),
         ]
         + link_args["LIBS"]
     ),
