@@ -68,9 +68,9 @@ def test_get_toolchain(class_testsuite, monkeypatch, capsys):
     Test 1 : Test toolchain returned by get_toolchain function is same as in the environment.
     Test 2 : Monkeypatch to delete the  ZEPHYR_TOOLCHAIN_VARIANT env var
     and check if appropriate error is raised"""
-    monkeypatch.setenv("ZEPHYR_TOOLCHAIN_VARIANT", "zephyros")
+    monkeypatch.setenv("ZEPHYR_TOOLCHAIN_VARIANT", "zephyr")
     toolchain = class_testsuite.get_toolchain()
-    assert toolchain in ["zephyros"]
+    assert toolchain in ["zephyr"]
 
     monkeypatch.delenv("ZEPHYR_TOOLCHAIN_VARIANT", raising=False)
     with pytest.raises(SystemExit):

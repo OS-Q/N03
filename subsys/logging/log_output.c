@@ -501,7 +501,7 @@ static uint32_t prefix_print(const struct log_output *log_output,
 			log_output, "%s - - - - ",
 			log_output->control_block->hostname ?
 			log_output->control_block->hostname :
-			"zephyros");
+			"zephyr");
 	} else {
 		color_prefix(log_output, colors_on, level);
 	}

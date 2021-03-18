@@ -257,7 +257,7 @@ menu "Build Options"
 
 config KERNEL_BIN_NAME
 	string "The kernel binary name"
-	default "zephyros"
+	default "zephyr"
 	help
 	  This option sets the name of the generated kernel binary.
 

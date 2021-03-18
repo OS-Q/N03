@@ -13,7 +13,7 @@ if NET_HOSTNAME_ENABLE
 
 config NET_HOSTNAME
 	string "The hostname of this device"
-	default "zephyros"
+	default "zephyr"
 	help
 	  The string should be a valid hostname.
 

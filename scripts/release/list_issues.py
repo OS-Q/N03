@@ -124,7 +124,7 @@ def parse_args():
     parser.add_argument("-o", "--org", default="zephyrproject-rtos",
                         help="Github organisation")
 
-    parser.add_argument("-r", "--repo", default="zephyros",
+    parser.add_argument("-r", "--repo", default="zephyr",
                         help="Github repository")
 
     parser.add_argument("-f", "--file", required=True,

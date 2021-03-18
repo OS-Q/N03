@@ -271,7 +271,7 @@ static int tls_init(const struct device *unused)
 	ARG_UNUSED(unused);
 
 	int ret;
-	static const unsigned char drbg_seed[] = "zephyros";
+	static const unsigned char drbg_seed[] = "zephyr";
 
 #if defined(CONFIG_ENTROPY_HAS_DRIVER)
 	entropy_dev = device_get_binding(DT_CHOSEN_ZEPHYR_ENTROPY_LABEL);

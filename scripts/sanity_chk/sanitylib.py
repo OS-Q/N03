@@ -1724,8 +1724,8 @@ class TestInstance(DisablePyTestCollectionMixin):
 
         @return A SizeCalculator object
         """
-        fns = glob.glob(os.path.join(self.build_dir, "zephyros", "*.elf"))
-        fns.extend(glob.glob(os.path.join(self.build_dir, "zephyros", "*.exe")))
+        fns = glob.glob(os.path.join(self.build_dir, "zephyr", "*.elf"))
+        fns.extend(glob.glob(os.path.join(self.build_dir, "zephyr", "*.exe")))
         fns = [x for x in fns if not x.endswith('_prebuilt.elf')]
         if len(fns) != 1:
             raise BuildError("Missing/multiple output ELF binary")
@@ -1916,7 +1916,7 @@ class FilterBuilder(CMake):
             return {}
 
         cmake_cache_path = os.path.join(self.build_dir, "CMakeCache.txt")
-        defconfig_path = os.path.join(self.build_dir, "zephyros", ".config")
+        defconfig_path = os.path.join(self.build_dir, "zephyr", ".config")
 
         with open(defconfig_path, "r") as fp:
             defconfig = {}
@@ -1949,7 +1949,7 @@ class FilterBuilder(CMake):
         filter_data.update(self.defconfig)
         filter_data.update(self.cmake_cache)
 
-        edt_pickle = os.path.join(self.build_dir, "zephyros", "edt.pickle")
+        edt_pickle = os.path.join(self.build_dir, "zephyr", "edt.pickle")
         if self.testcase and self.testcase.tc_filter:
             try:
                 if os.path.exists(edt_pickle):
@@ -2056,7 +2056,7 @@ class ProjectBuilder(FilterBuilder):
             handler.ubsan = self.ubsan
             handler.coverage = self.coverage
 
-            handler.binary = os.path.join(instance.build_dir, "zephyros", "zephyr.exe")
+            handler.binary = os.path.join(instance.build_dir, "zephyr", "zephyr.exe")
             instance.handler = handler
         elif instance.platform.simulation == "nsim":
             if find_executable("nsimdrv"):

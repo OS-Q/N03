@@ -34,7 +34,7 @@ const char *net_hostname_get(void);
 #else
 static inline const char *net_hostname_get(void)
 {
-	return "zephyros";
+	return "zephyr";
 }
 #endif /* CONFIG_NET_HOSTNAME_ENABLE */
 

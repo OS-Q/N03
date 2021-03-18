@@ -9,7 +9,7 @@
 #include <sys/util.h>	/* for ARRAY_SIZE */
 #include <ztest.h>
 
-#define CLIENTID	MQTT_UTF8_LITERAL("zephyros")
+#define CLIENTID	MQTT_UTF8_LITERAL("zephyr")
 #define TOPIC		MQTT_UTF8_LITERAL("sensors")
 #define WILL_TOPIC	MQTT_UTF8_LITERAL("quitting")
 #define WILL_MSG	MQTT_UTF8_LITERAL("bye")
